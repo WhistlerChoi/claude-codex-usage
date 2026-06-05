@@ -1,0 +1,10 @@
+# 의존성 / 빌드 산출물
+node_modules/
+dist/
+*.vsix
+
+# 로컬 Claude Code 설정 (사용자별)
+.claude/settings.local.json
+
+# macOS
+.DS_Store

@@ -1,0 +1,6 @@
+# SwiftPM 빌드 / 번들 산출물
+.build/
+*.app/
+
+# macOS
+.DS_Store

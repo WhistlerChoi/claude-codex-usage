@@ -1,0 +1,7 @@
+# 컴파일된 바이너리
+ClaudeUsage.exe
+*.exe
+cu-mac
+
+# macOS
+.DS_Store

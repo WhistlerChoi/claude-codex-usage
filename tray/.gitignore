@@ -1,0 +1,7 @@
+# 의존성 / 빌드 산출물 (esbuild 번들, electron-builder 출력)
+node_modules/
+dist/
+out/
+
+# macOS
+.DS_Store

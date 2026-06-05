@@ -1,0 +1,64 @@
+{
+  "name": "claude-usage",
+  "displayName": "Claude Code Usage",
+  "description": "Claude Code의 5시간/주간 사용률을 상태바에 표시합니다.",
+  "version": "0.3.0",
+  "publisher": "wemeet",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "claudeUsage.refresh",
+        "title": "Claude Usage: 지금 새로고침"
+      }
+    ],
+    "configuration": {
+      "title": "Claude Code Usage",
+      "properties": {
+        "claudeUsage.refreshInterval": {
+          "type": "number",
+          "default": 300,
+          "minimum": 10,
+          "description": "사용량 갱신 주기(초). 최소 10초."
+        },
+        "claudeUsage.warnThreshold": {
+          "type": "number",
+          "default": 0.8,
+          "minimum": 0,
+          "maximum": 1,
+          "description": "이 사용률 이상이면 상태바를 경고색으로 표시 (0~1)."
+        },
+        "claudeUsage.alertThreshold": {
+          "type": "number",
+          "default": 0.95,
+          "minimum": 0,
+          "maximum": 1,
+          "description": "이 사용률 이상이면 상태바를 에러색으로 표시 (0~1)."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "node esbuild.js",
+    "watch": "node esbuild.js --watch",
+    "package": "node esbuild.js --production",
+    "test": "node --test --import tsx ./src/*.test.ts",
+    "vsce:package": "vsce package"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.85.0",
+    "esbuild": "^0.20.0",
+    "tsx": "^4.7.0",
+    "typescript": "^5.3.0"
+  }
+}
