@@ -1,6 +1,25 @@
-# Claude Code Usage (VSCode 확장)
+# Claude Code Usage
 
-Claude Code의 **5시간 / 주간 사용률**을 VSCode 상태바에 항상 표시합니다.
+Claude Code의 **5시간 / 주간 사용률**(+ 현재 모델)을 화면에 항상 표시합니다.
+`/usage`가 쓰는 것과 동일한 데이터를 읽으며, 같은 코어 로직을 4가지 플랫폼 UI로 제공합니다.
+
+## 구현 종류
+
+| 폴더 | 표시 위치 | 스택 | 비고 |
+| --- | --- | --- | --- |
+| [`src/`](src/) | VSCode 상태바 | TypeScript + esbuild | 코어 원본 (아래 문서) |
+| [`tray/`](tray/) | Windows/macOS 시스템 트레이 | Electron | `../src` 코어를 그대로 재사용 |
+| [`tray-go/`](tray-go/) | Windows/macOS 트레이 (경량) | Go (`systray`) | 단일 exe ~7MB, 의존성 없음 |
+| [`menubar/`](menubar/) | macOS 메뉴바 | Swift / AppKit | 메뉴바 전용(Dock 없음) |
+
+`src/`가 기준 구현이며, `tray-go`·`menubar`는 동일 설계를 각 언어로 이식한 것입니다.
+트레이/메뉴바 앱의 빌드·실행은 각 폴더의 README를 참고하세요. 아래는 **VSCode 확장** 안내입니다.
+
+---
+
+## VSCode 확장
+
+Claude Code의 5시간 / 주간 사용률을 VSCode 상태바에 항상 표시합니다.
 
 ![상태바 예시](https://img.shields.io/badge/status%20bar-5h%2042%25%20%C2%B7%20wk%208%25-blue)
 
