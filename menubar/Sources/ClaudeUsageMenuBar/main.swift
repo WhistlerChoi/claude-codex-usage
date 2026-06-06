@@ -61,6 +61,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.terminate(nil)
     }
 
+    @objc func login() {
+        let script = """
+        tell application "Terminal"
+            activate
+            do script "claude"
+        end tell
+        """
+        if let s = NSAppleScript(source: script) {
+            var err: NSDictionary?
+            s.executeAndReturnError(&err)
+        }
+    }
+
     // MARK: - 렌더링
 
     private func renderUsage(_ usage: UsageData, _ model: CurrentModel?) {
@@ -106,7 +119,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         setStacked(top: "로그인", bottom: "필요", color: .systemRed)
-        rebuildMenu(detailLines: [error.localizedDescription])
+        rebuildMenu(detailLines: [error.localizedDescription], showLogin: true)
     }
 
     private func isAuthError(_ error: Error) -> Bool {
@@ -136,7 +149,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             height: NSStatusBar.system.thickness)
     }
 
-    private func rebuildMenu(detailLines: [String]) {
+    private func rebuildMenu(detailLines: [String], showLogin: Bool = false) {
         let menu = NSMenu()
         menu.autoenablesItems = false  // 정보 줄을 흐리게(disabled) 표시하지 않도록
         for line in detailLines {
@@ -152,6 +165,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             menu.addItem(item)
         }
         menu.addItem(.separator())
+        if showLogin {
+            let loginItem = NSMenuItem(
+                title: "Claude Code에서 로그인", action: #selector(login), keyEquivalent: "l")
+            loginItem.target = self
+            menu.addItem(loginItem)
+        }
         let refreshItem = NSMenuItem(title: "지금 새로고침", action: #selector(refresh), keyEquivalent: "r")
         refreshItem.target = self
         menu.addItem(refreshItem)
