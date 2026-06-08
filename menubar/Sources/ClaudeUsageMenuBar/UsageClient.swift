@@ -15,14 +15,22 @@ struct UsageData {
 enum UsageError: Error, LocalizedError {
     case auth
     case http(Int)
+    case rateLimited(retryAfter: TimeInterval?)
     case malformed
     var errorDescription: String? {
         switch self {
         case .auth: return "인증이 만료되었습니다. Claude Code에서 재로그인하세요."
         case .http(let c): return "usage API 오류: HTTP \(c)"
+        case .rateLimited: return "usage API 오류: HTTP 429"
         case .malformed: return "usage 응답 형식 오류."
         }
     }
+}
+
+/// 에러에서 Retry-After(초)를 꺼낸다. rateLimited가 아니면 nil.
+func retryAfter(from error: Error) -> TimeInterval? {
+    if case UsageError.rateLimited(let ra) = error { return ra }
+    return nil
 }
 
 private func parseWindow(_ any: Any?) -> UsageWindow? {
@@ -61,6 +69,10 @@ func fetchUsage() async throws -> UsageData {
     }
     if http.statusCode == 401 || http.statusCode == 403 {
         throw UsageError.auth
+    }
+    if http.statusCode == 429 {
+        let ra = http.value(forHTTPHeaderField: "Retry-After").flatMap { Int($0) }
+        throw UsageError.rateLimited(retryAfter: ra.map { TimeInterval($0) })
     }
     guard (200..<300).contains(http.statusCode) else {
         throw UsageError.http(http.statusCode)
