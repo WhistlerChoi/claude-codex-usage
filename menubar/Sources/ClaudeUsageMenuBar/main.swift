@@ -10,6 +10,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var lastUpdated: Date?
     private var lastSuccessAt: Date?
     private var consecutiveFailures = 0
+    private var inFlight = false
 
     // 2줄 표시 미세조정 (환경변수로 조정, 재빌드 불필요)
     private let fontSize: CGFloat       // CLAUDE_USAGE_FONT_SIZE (기본 9)
@@ -44,12 +45,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc func refresh() {
+        if inFlight { return }
+        inFlight = true
         Task.detached { [weak self] in
             guard let self else { return }
             do {
                 let usage = try await fetchUsage()
                 let model = readCurrentModel()
                 await MainActor.run {
+                    self.inFlight = false
                     self.renderUsage(usage, model)
                     self.lastSuccessAt = Date()
                     self.consecutiveFailures = 0
@@ -57,6 +61,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             } catch {
                 await MainActor.run {
+                    self.inFlight = false
                     self.scheduleNext(self.handleError(error))
                 }
             }
