@@ -1,7 +1,7 @@
 # Claude Usage — 트레이 앱 (Go, 경량)
 
 Claude Code 사용량을 시스템 트레이에 표시하는 **Go 네이티브** 앱입니다.
-Electron 버전(~146MB)을 대체하는 **단일 exe ~7MB**, 런타임 의존성 없음.
+**단일 exe ~7MB**, 런타임 의존성 없음.
 
 ## 표시 방식
 
@@ -37,13 +37,6 @@ go run . --render /tmp/icon.png && open /tmp/icon.png
 ## 설정
 
 - 갱신 주기: 환경변수 `CLAUDE_USAGE_INTERVAL`(초, 기본 300, 최소 10)
-
-## 크기 비교
-
-| 구현 | 크기 |
-|---|---|
-| Electron (`../tray`) | ~146MB |
-| **Go (이 폴더)** | **~7MB** |
 
 ## 요구 사항
 

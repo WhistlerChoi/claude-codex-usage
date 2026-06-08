@@ -4,16 +4,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-Four front-ends that display Claude Code's **5-hour / weekly usage** (and current model) in an always-visible UI surface. They all read the same data the `/usage` command uses and share identical core logic — only the presentation layer differs per platform.
+Three front-ends that display Claude Code's **5-hour / weekly usage** (and current model) in an always-visible UI surface. They all read the same data the `/usage` command uses and share identical core logic — only the presentation layer differs per platform.
 
 | Dir | Platform / surface | Stack |
 |---|---|---|
 | `src/` | VSCode status bar | TypeScript + esbuild (the canonical core) |
-| `tray/` | Windows/macOS system tray | Electron — **imports core from `../../src`** |
 | `tray-go/` | Windows/macOS tray, lightweight (~7MB exe) | Go (`getlantern/systray`) — core re-ported |
 | `menubar/` | macOS menu bar | Swift / AppKit — core re-ported |
 
-`src/` is the source of truth. `tray/` reuses it directly via relative imports. `tray-go/` and `menubar/` are hand-ports of the same four-module design, so **a logic change in `src/` must be mirrored** into `tray-go/*.go` and `menubar/Sources/ClaudeUsageMenuBar/*.swift`.
+`src/` is the source of truth. `tray-go/` and `menubar/` are hand-ports of the same four-module design, so **a logic change in `src/` must be mirrored** into `tray-go/*.go` and `menubar/Sources/ClaudeUsageMenuBar/*.swift`.
 
 ## Shared architecture (same 4 modules in every implementation)
 
@@ -24,7 +23,7 @@ Four front-ends that display Claude Code's **5-hour / weekly usage** (and curren
 
 ### CRITICAL: `utilization` is 0–100, not 0–1
 
-The API returns `utilization` as a **percent (0–100)**, despite some stale doc/comments (`usageClient.ts` interface, the design spec) claiming `0.0–1.0`. Consequences, must stay consistent across all four ports:
+The API returns `utilization` as a **percent (0–100)**, despite some stale doc/comments (`usageClient.ts` interface, the design spec) claiming `0.0–1.0`. Consequences, must stay consistent across all three ports:
 - Display: `pct()` just rounds the value — **do not** multiply by 100.
 - Threshold comparison: `peakUtilization()` divides by 100 to get a 0–1 fraction, then compares against `warnThreshold` (0.8) / `alertThreshold` (0.95).
 
@@ -49,13 +48,6 @@ npm run watch               # rebuild on change
 npx @vscode/vsce package    # → claude-usage-<version>.vsix
 ```
 Debug: open the repo in VSCode, press `F5` (Extension Development Host). Install: `code --install-extension claude-usage-<version>.vsix`.
-
-**Electron tray (`tray/`)** — from `tray/`:
-```bash
-npm install && npm run build   # esbuild bundle → dist/main.js
-npm start                      # electron .  (works on macOS for dev too)
-npm run dist:win               # portable .exe via electron-builder
-```
 
 **Go tray (`tray-go/`)** — from `tray-go/`:
 ```bash

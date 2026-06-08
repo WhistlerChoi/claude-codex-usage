@@ -1,14 +1,13 @@
 # Claude Code Usage
 
 Claude Code의 **5시간 / 주간 사용률**(+ 현재 모델)을 화면에 항상 표시합니다.
-`/usage`가 쓰는 것과 동일한 데이터를 읽으며, 같은 코어 로직을 4가지 플랫폼 UI로 제공합니다.
+`/usage`가 쓰는 것과 동일한 데이터를 읽으며, 같은 코어 로직을 3가지 플랫폼 UI로 제공합니다.
 
 ## 구현 종류
 
 | 폴더 | 표시 위치 | 스택 | 비고 |
 | --- | --- | --- | --- |
 | [`src/`](src/) | VSCode 상태바 | TypeScript + esbuild | 코어 원본 (아래 문서) |
-| [`tray/`](tray/) | Windows/macOS 시스템 트레이 | Electron | `../src` 코어를 그대로 재사용 |
 | [`tray-go/`](tray-go/) | Windows/macOS 트레이 (경량) | Go (`systray`) | 단일 exe ~7MB, 의존성 없음 |
 | [`menubar/`](menubar/) | macOS 메뉴바 | Swift / AppKit | 메뉴바 전용(Dock 없음) |
 
