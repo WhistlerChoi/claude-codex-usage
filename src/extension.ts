@@ -52,6 +52,7 @@ async function refresh(): Promise<void> {
   } catch (err) {
     if (err instanceof AuthError || err instanceof CredentialsError) {
       statusBar.showError(err.message);
+      consecutiveFailures = 0;
       // 인증 오류는 백오프하지 않고 정규 주기로
     } else {
       // 일시적 오류: 백오프 재시도
@@ -81,7 +82,9 @@ export function activate(context: vscode.ExtensionContext): void {
 
   context.subscriptions.push(
     vscode.commands.registerCommand("claudeUsage.refresh", () => {
-      statusBar.showLoading();
+      if (!inFlight) {
+        statusBar.showLoading();
+      }
       void refresh();
     })
   );
