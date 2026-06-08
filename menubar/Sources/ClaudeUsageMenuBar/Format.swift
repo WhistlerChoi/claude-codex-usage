@@ -50,3 +50,19 @@ func clockString(_ d: Date) -> String {
     f.dateFormat = "HH:mm:ss"
     return f.string(from: d)
 }
+
+/// 일시적 실패 후 다음 폴링까지 지연(초).
+/// retryAfter가 있으면 interval로 cap, 아니면 지수 백오프(base 10s, ×2)를 interval로 cap.
+func nextRetryDelay(_ consecutiveFailures: Int, _ interval: TimeInterval, _ retryAfter: TimeInterval?) -> TimeInterval {
+    if let ra = retryAfter, ra > 0 {
+        return min(ra, interval)
+    }
+    let base: TimeInterval = 10
+    let exp = base * pow(2.0, Double(max(0, consecutiveFailures - 1)))
+    return min(exp, interval)
+}
+
+/// 마지막 성공으로부터 age가 interval*3 이상이면 stale.
+func shouldShowStale(_ age: TimeInterval, _ interval: TimeInterval) -> Bool {
+    return age >= interval * 3
+}
