@@ -87,3 +87,25 @@ function formatClock(d: Date): string {
 export function peakUtilization(usage: UsageData): number {
   return Math.max(usage.fiveHour.utilization, usage.sevenDay.utilization) / 100;
 }
+
+/**
+ * 일시적 실패 후 다음 폴링까지의 지연(ms).
+ * retryAfterMs가 주어지면 그 값을 interval로 cap. 아니면 지수 백오프(base 10s, ×2)를 interval로 cap.
+ */
+export function nextRetryDelayMs(
+  consecutiveFailures: number,
+  intervalMs: number,
+  retryAfterMs?: number
+): number {
+  if (retryAfterMs != null && retryAfterMs > 0) {
+    return Math.min(retryAfterMs, intervalMs);
+  }
+  const base = 10_000;
+  const exp = base * 2 ** Math.max(0, consecutiveFailures - 1);
+  return Math.min(exp, intervalMs);
+}
+
+/** 마지막 성공으로부터 ageMs가 interval*3 이상이면 stale로 표시. */
+export function shouldShowStale(ageMs: number, intervalMs: number): boolean {
+  return ageMs >= intervalMs * 3;
+}

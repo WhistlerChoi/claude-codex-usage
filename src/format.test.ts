@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { pct, statusBarText, formatResetIn, peakUtilization, tooltipMarkdown } from "./format";
+import { pct, statusBarText, formatResetIn, peakUtilization, tooltipMarkdown, nextRetryDelayMs, shouldShowStale } from "./format";
 import { parseUsage, type UsageData } from "./usageClient";
 
 // utilization은 퍼센트 단위(0~100)
@@ -66,4 +66,32 @@ test("tooltipMarkdown includes sonnet but not opus when opus null", () => {
   assert.match(md, /5시간/);
   assert.match(md, /주간 Sonnet/);
   assert.doesNotMatch(md, /주간 Opus/);
+});
+
+test("nextRetryDelayMs: 지수 백오프, base 10s, ×2", () => {
+  const interval = 300_000;
+  assert.equal(nextRetryDelayMs(1, interval), 10_000);
+  assert.equal(nextRetryDelayMs(2, interval), 20_000);
+  assert.equal(nextRetryDelayMs(3, interval), 40_000);
+  assert.equal(nextRetryDelayMs(4, interval), 80_000);
+});
+
+test("nextRetryDelayMs: interval로 cap", () => {
+  const interval = 300_000;
+  assert.equal(nextRetryDelayMs(6, interval), 300_000); // 10s*2^5=320s > 300s
+  assert.equal(nextRetryDelayMs(99, interval), 300_000);
+});
+
+test("nextRetryDelayMs: retryAfter 우선, interval로 cap", () => {
+  const interval = 300_000;
+  assert.equal(nextRetryDelayMs(1, interval, 45_000), 45_000);
+  assert.equal(nextRetryDelayMs(1, interval, 600_000), 300_000);
+  assert.equal(nextRetryDelayMs(1, interval, 0), 10_000); // 0이면 무시하고 백오프
+});
+
+test("shouldShowStale: age >= interval*3", () => {
+  const interval = 300_000;
+  assert.equal(shouldShowStale(899_000, interval), false);
+  assert.equal(shouldShowStale(900_000, interval), true);
+  assert.equal(shouldShowStale(0, interval), false);
 });
