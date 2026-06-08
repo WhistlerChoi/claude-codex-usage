@@ -18,6 +18,23 @@ export interface UsageData {
 
 export class AuthError extends Error {}
 
+/** 네트워크/5xx/429 등 재시도 가능한 일시적 오류. */
+export class TransientError extends Error {
+  readonly retryAfterMs?: number;
+  constructor(message: string, retryAfterMs?: number) {
+    super(message);
+    this.retryAfterMs = retryAfterMs;
+  }
+}
+
+/** Retry-After 헤더(정수 초)를 ms로. 없거나 HTTP-date 등 비정수면 undefined. */
+export function parseRetryAfterMs(header: string | null): number | undefined {
+  if (header == null) return undefined;
+  const trimmed = header.trim();
+  if (!/^\d+$/.test(trimmed)) return undefined;
+  return parseInt(trimmed, 10) * 1000;
+}
+
 function parseWindow(raw: unknown): UsageWindow | null {
   if (!raw || typeof raw !== "object") {
     return null;
@@ -64,8 +81,14 @@ export async function fetchUsage(): Promise<UsageData> {
   if (res.status === 401 || res.status === 403) {
     throw new AuthError("인증이 만료되었습니다. Claude Code에서 재로그인하세요.");
   }
+  if (res.status === 429) {
+    throw new TransientError(
+      `usage API 오류: HTTP 429`,
+      parseRetryAfterMs(res.headers.get("retry-after"))
+    );
+  }
   if (!res.ok) {
-    throw new Error(`usage API 오류: HTTP ${res.status}`);
+    throw new TransientError(`usage API 오류: HTTP ${res.status}`);
   }
 
   const json = await res.json();

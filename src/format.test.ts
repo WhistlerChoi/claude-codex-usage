@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { pct, statusBarText, formatResetIn, peakUtilization, tooltipMarkdown, nextRetryDelayMs, shouldShowStale } from "./format";
-import { parseUsage, type UsageData } from "./usageClient";
+import { parseUsage, parseRetryAfterMs, type UsageData } from "./usageClient";
 
 // utilization은 퍼센트 단위(0~100)
 const sampleRaw = {
@@ -94,4 +94,15 @@ test("shouldShowStale: age >= interval*3", () => {
   assert.equal(shouldShowStale(899_000, interval), false);
   assert.equal(shouldShowStale(900_000, interval), true);
   assert.equal(shouldShowStale(0, interval), false);
+});
+
+test("parseRetryAfterMs: 정수 초를 ms로", () => {
+  assert.equal(parseRetryAfterMs("30"), 30_000);
+  assert.equal(parseRetryAfterMs("0"), 0);
+});
+
+test("parseRetryAfterMs: 없음/비정수는 undefined", () => {
+  assert.equal(parseRetryAfterMs(null), undefined);
+  assert.equal(parseRetryAfterMs("Wed, 21 Oct 2025 07:28:00 GMT"), undefined);
+  assert.equal(parseRetryAfterMs("abc"), undefined);
 });
