@@ -77,3 +77,30 @@ func formatResetIn(resetsAt *string, now time.Time) string {
 func peakUtilization(u *usageResp) float64 {
 	return math.Max(u.FiveHour.Utilization, u.SevenDay.Utilization) / 100
 }
+
+// nextRetryDelay: 일시적 실패 후 다음 폴링까지 지연.
+// retryAfter>0이면 그 값을 interval로 cap, 아니면 지수 백오프(base 10s, ×2)를 interval로 cap.
+func nextRetryDelay(consecutiveFailures int, interval, retryAfter time.Duration) time.Duration {
+	if retryAfter > 0 {
+		if retryAfter > interval {
+			return interval
+		}
+		return retryAfter
+	}
+	exp := 10 * time.Second
+	for i := 1; i < consecutiveFailures; i++ {
+		exp *= 2
+		if exp >= interval {
+			return interval
+		}
+	}
+	if exp > interval {
+		return interval
+	}
+	return exp
+}
+
+// shouldShowStale: 마지막 성공으로부터 age가 interval*3 이상이면 stale.
+func shouldShowStale(age, interval time.Duration) bool {
+	return age >= interval*3
+}
