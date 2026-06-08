@@ -8,6 +8,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var lastUsage: UsageData?
     private var lastModel: CurrentModel?
     private var lastUpdated: Date?
+    private var lastSuccessAt: Date?
+    private var consecutiveFailures = 0
 
     // 2줄 표시 미세조정 (환경변수로 조정, 재빌드 불필요)
     private let fontSize: CGFloat       // CLAUDE_USAGE_FONT_SIZE (기본 9)
@@ -39,9 +41,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         rebuildMenu(detailLines: ["불러오는 중..."])
 
         refresh()
-        timer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
-            self?.refresh()
-        }
     }
 
     @objc func refresh() {
@@ -50,10 +49,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             do {
                 let usage = try await fetchUsage()
                 let model = readCurrentModel()
-                await MainActor.run { self.renderUsage(usage, model) }
+                await MainActor.run {
+                    self.renderUsage(usage, model)
+                    self.lastSuccessAt = Date()
+                    self.consecutiveFailures = 0
+                    self.scheduleNext(self.interval)
+                }
             } catch {
-                await MainActor.run { self.renderError(error) }
+                await MainActor.run {
+                    self.scheduleNext(self.handleError(error))
+                }
             }
+        }
+    }
+
+    private func scheduleNext(_ delay: TimeInterval) {
+        timer?.invalidate()
+        timer = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { [weak self] _ in
+            self?.refresh()
         }
     }
 
@@ -104,9 +117,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         rebuildMenu(detailLines: lines)
     }
 
-    private func renderError(_ error: Error) {
-        // 일시적 네트워크 오류면 직전 값 유지 + 표시
-        if let usage = lastUsage, !(error is CredentialsError) && !isAuthError(error) {
+    /// 에러 표시를 갱신하고 다음 폴링까지 지연(초)을 반환한다.
+    private func handleError(_ error: Error) -> TimeInterval {
+        if error is CredentialsError || isAuthError(error) {
+            setStacked(top: "로그인", bottom: "필요", color: .systemRed)
+            rebuildMenu(detailLines: [error.localizedDescription], showLogin: true)
+            consecutiveFailures = 0
+            return interval
+        }
+        // 일시적 오류: 백오프 재시도
+        consecutiveFailures += 1
+        let age = lastSuccessAt.map { Date().timeIntervalSince($0) } ?? .greatestFiniteMagnitude
+        if let usage = lastUsage, !shouldShowStale(age, interval) {
+            _ = usage  // 아직 신선함 → 표시 변화 없음(no-op)
+        } else if let usage = lastUsage {
             setStacked(
                 top: "\(pct(usage.fiveHour.utilization))%",
                 bottom: "\(pct(usage.sevenDay.utilization))%",
@@ -116,10 +140,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 "⚠ 갱신 실패 — 이전 값 표시 중",
                 error.localizedDescription,
             ])
-            return
+        } else {
+            setStacked(top: "로그인", bottom: "필요", color: .systemRed)
+            rebuildMenu(detailLines: [error.localizedDescription], showLogin: true)
         }
-        setStacked(top: "로그인", bottom: "필요", color: .systemRed)
-        rebuildMenu(detailLines: [error.localizedDescription], showLogin: true)
+        return nextRetryDelay(consecutiveFailures, interval, retryAfter(from: error))
     }
 
     private func isAuthError(_ error: Error) -> Bool {
