@@ -1,13 +1,16 @@
 import * as vscode from "vscode";
-import { fetchUsage, AuthError, type UsageData } from "./usageClient";
+import { fetchUsage, AuthError, TransientError, type UsageData } from "./usageClient";
 import { CredentialsError } from "./credentials";
 import { readCurrentModel, type CurrentModel } from "./model";
 import { UsageStatusBar, type Thresholds } from "./statusBar";
+import { nextRetryDelayMs, shouldShowStale } from "./format";
 
 let statusBar: UsageStatusBar;
 let timer: NodeJS.Timeout | undefined;
 let lastUsage: UsageData | undefined;
 let lastModel: CurrentModel | null = null;
+let lastSuccessAt: number | undefined;
+let consecutiveFailures = 0;
 let inFlight = false;
 
 function readConfig(): { intervalMs: number; thresholds: Thresholds } {
@@ -22,42 +25,54 @@ function readConfig(): { intervalMs: number; thresholds: Thresholds } {
   };
 }
 
+function scheduleNext(delayMs: number): void {
+  if (timer) {
+    clearTimeout(timer);
+  }
+  timer = setTimeout(() => void refresh(), delayMs);
+}
+
 async function refresh(): Promise<void> {
   if (inFlight) {
     return;
   }
   inFlight = true;
-  const { thresholds } = readConfig();
+  const { intervalMs, thresholds } = readConfig();
+  let nextDelayMs = intervalMs;
   try {
-    // 사용량(API)과 모델(로컬 파일)을 병렬로. 모델은 best-effort라 실패해도 무시.
     const [usage, model] = await Promise.all([
       fetchUsage(),
       readCurrentModel().catch(() => null),
     ]);
     lastUsage = usage;
     lastModel = model;
+    lastSuccessAt = Date.now();
+    consecutiveFailures = 0;
     statusBar.showUsage(usage, new Date(), thresholds, false, model);
   } catch (err) {
     if (err instanceof AuthError || err instanceof CredentialsError) {
       statusBar.showError(err.message);
-    } else if (lastUsage) {
-      // 네트워크 등 일시적 오류: 마지막 값을 유지하고 stale 표시
-      statusBar.showUsage(lastUsage, new Date(), thresholds, true, lastModel);
+      // 인증 오류는 백오프하지 않고 정규 주기로
     } else {
-      const msg = err instanceof Error ? err.message : String(err);
-      statusBar.showError(msg);
+      // 일시적 오류: 백오프 재시도
+      consecutiveFailures += 1;
+      const retryAfterMs =
+        err instanceof TransientError ? err.retryAfterMs : undefined;
+      nextDelayMs = nextRetryDelayMs(consecutiveFailures, intervalMs, retryAfterMs);
+      const ageMs = lastSuccessAt != null ? Date.now() - lastSuccessAt : Infinity;
+      if (lastUsage && !shouldShowStale(ageMs, intervalMs)) {
+        // 아직 신선함 → 표시 변화 없음(직전 정상 렌더 유지, no-op)
+      } else if (lastUsage) {
+        statusBar.showUsage(lastUsage, new Date(), thresholds, true, lastModel);
+      } else {
+        const msg = err instanceof Error ? err.message : String(err);
+        statusBar.showError(msg);
+      }
     }
   } finally {
     inFlight = false;
+    scheduleNext(nextDelayMs);
   }
-}
-
-function restartTimer(): void {
-  if (timer) {
-    clearInterval(timer);
-  }
-  const { intervalMs } = readConfig();
-  timer = setInterval(() => void refresh(), intervalMs);
 }
 
 export function activate(context: vscode.ExtensionContext): void {
@@ -74,19 +89,17 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     vscode.workspace.onDidChangeConfiguration((e) => {
       if (e.affectsConfiguration("claudeUsage")) {
-        restartTimer();
         void refresh();
       }
     })
   );
 
   void refresh();
-  restartTimer();
 }
 
 export function deactivate(): void {
   if (timer) {
-    clearInterval(timer);
+    clearTimeout(timer);
     timer = undefined;
   }
 }
