@@ -12,10 +12,13 @@ import (
 )
 
 var (
-	detailItems      []*systray.MenuItem
-	mRefresh, mQuit  *systray.MenuItem
-	lastUsage        *usageResp
-	lastModel        *currentModel
+	detailItems         []*systray.MenuItem
+	mRefresh, mQuit     *systray.MenuItem
+	lastUsage           *usageResp
+	lastModel           *currentModel
+	lastSuccessAt       time.Time
+	consecutiveFailures int
+	manualRefresh       = make(chan struct{}, 1)
 )
 
 const (
@@ -57,7 +60,10 @@ func onReady() {
 		for {
 			select {
 			case <-mRefresh.ClickedCh:
-				refresh()
+				select {
+				case manualRefresh <- struct{}{}:
+				default:
+				}
 			case <-mQuit.ClickedCh:
 				systray.Quit()
 				return
@@ -67,32 +73,61 @@ func onReady() {
 }
 
 func pollLoop() {
-	refresh()
 	interval := 300
 	if v := os.Getenv("CLAUDE_USAGE_INTERVAL"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n >= 10 {
 			interval = n
 		}
 	}
-	ticker := time.NewTicker(time.Duration(interval) * time.Second)
-	for range ticker.C {
-		refresh()
+	intervalDur := time.Duration(interval) * time.Second
+
+	delay := refresh(intervalDur)
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	for {
+		select {
+		case <-timer.C:
+		case <-manualRefresh:
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+		}
+		timer.Reset(refresh(intervalDur))
 	}
 }
 
-func refresh() {
+func refresh(interval time.Duration) time.Duration {
 	usage, err := fetchUsage()
 	if err != nil {
-		if lastUsage != nil && !errors.Is(err, errAuth) && !errors.Is(err, errNoCreds) {
+		if errors.Is(err, errAuth) || errors.Is(err, errNoCreds) {
+			applyError(err.Error())
+			consecutiveFailures = 0
+			return interval
+		}
+		// 일시적 오류: 백오프 재시도
+		consecutiveFailures++
+		age := time.Duration(1 << 62) // lastSuccessAt 없으면 사실상 무한대
+		if !lastSuccessAt.IsZero() {
+			age = time.Since(lastSuccessAt)
+		}
+		if lastUsage != nil && !shouldShowStale(age, interval) {
+			// 아직 신선함 → 표시 변화 없음(no-op)
+		} else if lastUsage != nil {
 			applyUsage(lastUsage, lastModel, true)
 		} else {
 			applyError(err.Error())
 		}
-		return
+		return nextRetryDelay(consecutiveFailures, interval, retryAfterFrom(err))
 	}
 	model, _ := readCurrentModel()
 	lastUsage, lastModel = usage, model
+	lastSuccessAt = time.Now()
+	consecutiveFailures = 0
 	applyUsage(usage, model, false)
+	return interval
 }
 
 func bgFor(u *usageResp) string {
