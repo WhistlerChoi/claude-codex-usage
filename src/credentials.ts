@@ -10,22 +10,22 @@ const KEYCHAIN_SERVICE = "Claude Code-credentials";
 
 export class CredentialsError extends Error {}
 
-/** 자격 증명 JSON 문자열에서 accessToken을 뽑는다. 형식: { claudeAiOauth: { accessToken } } 또는 { accessToken }. */
+/** Extract accessToken from a credentials JSON string. Format: { claudeAiOauth: { accessToken } } or { accessToken }. */
 export function extractAccessToken(raw: string): string {
   let token: unknown;
   try {
     const parsed = JSON.parse(raw.trim());
     token = parsed?.claudeAiOauth?.accessToken ?? parsed?.accessToken;
   } catch {
-    throw new CredentialsError("자격 증명 형식을 해석하지 못했습니다.");
+    throw new CredentialsError("Could not read credentials. Log in with Claude Code.");
   }
   if (typeof token !== "string" || token.length === 0) {
-    throw new CredentialsError("accessToken을 찾지 못했습니다. 재로그인이 필요할 수 있습니다.");
+    throw new CredentialsError("Could not find accessToken. You may need to log in again.");
   }
   return token;
 }
 
-/** Windows/Linux/macOS 공통 파일 경로의 자격 증명을 읽는다. 없으면 null. */
+/** Read credentials from the common file path (Windows/Linux/macOS). Returns null if absent. */
 async function readFromFile(): Promise<string | null> {
   const path = join(homedir(), ".claude", ".credentials.json");
   try {
@@ -35,7 +35,7 @@ async function readFromFile(): Promise<string | null> {
   }
 }
 
-/** macOS 키체인에서 자격 증명을 읽는다. 없으면 null. */
+/** Read credentials from the macOS keychain. Returns null if absent. */
 async function readFromKeychain(): Promise<string | null> {
   if (process.platform !== "darwin") {
     return null;
@@ -54,10 +54,10 @@ async function readFromKeychain(): Promise<string | null> {
 }
 
 /**
- * Claude Code의 OAuth accessToken을 읽는다.
- * - 우선 ~/.claude/.credentials.json (Windows/Linux 기본, macOS도 있으면 사용)
- * - 없으면 macOS 키체인
- * Claude Code가 토큰을 주기적으로 갱신하므로, 폴링마다 새로 읽으면 만료에 자동 대응된다.
+ * Read Claude Code's OAuth accessToken.
+ * - First ~/.claude/.credentials.json (default on Windows/Linux, and used on macOS if present)
+ * - Otherwise the macOS keychain
+ * Claude Code refreshes the token periodically, so re-reading every poll handles expiry automatically.
  */
 export async function readAccessToken(): Promise<string> {
   const fileRaw = await readFromFile();
@@ -71,6 +71,6 @@ export async function readAccessToken(): Promise<string> {
   }
 
   throw new CredentialsError(
-    "Claude Code 자격 증명을 찾지 못했습니다. Claude Code에 로그인했는지 확인하세요."
+    "Could not read credentials. Log in with Claude Code."
   );
 }

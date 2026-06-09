@@ -12,7 +12,7 @@ type currentModel struct {
 	Name string
 }
 
-// readCurrentModel: ~/.claude/projects 아래 최신 트랜스크립트의 마지막 model.
+// readCurrentModel: the last model from the most recent transcript under ~/.claude/projects.
 func readCurrentModel() (*currentModel, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {

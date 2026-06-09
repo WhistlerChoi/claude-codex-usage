@@ -1,7 +1,7 @@
 import Foundation
 
 struct UsageWindow {
-    let utilization: Double  // 0~100 (이미 퍼센트 단위)
+    let utilization: Double  // 0-100 (already in percent units)
     let resetsAt: String?
 }
 
@@ -19,15 +19,15 @@ enum UsageError: Error, LocalizedError {
     case malformed
     var errorDescription: String? {
         switch self {
-        case .auth: return "인증이 만료되었습니다. Claude Code에서 재로그인하세요."
-        case .http(let c): return "usage API 오류: HTTP \(c)"
-        case .rateLimited: return "usage API 오류: HTTP 429"
-        case .malformed: return "usage 응답 형식 오류."
+        case .auth: return "Authentication expired. Log in again."
+        case .http(let c): return "usage API error: HTTP \(c)"
+        case .rateLimited: return "usage API error: HTTP 429"
+        case .malformed: return "Malformed usage response."
         }
     }
 }
 
-/// 에러에서 Retry-After(초)를 꺼낸다. rateLimited가 아니면 nil.
+/// Extract Retry-After (seconds) from the error. Returns nil if not rateLimited.
 func retryAfter(from error: Error) -> TimeInterval? {
     if case UsageError.rateLimited(let ra) = error { return ra }
     return nil
@@ -41,7 +41,7 @@ private func parseWindow(_ any: Any?) -> UsageWindow? {
     return UsageWindow(utilization: num.doubleValue, resetsAt: d["resets_at"] as? String)
 }
 
-/// 원시 JSON -> UsageData
+/// Raw JSON -> UsageData
 func parseUsage(_ json: Any) throws -> UsageData {
     guard let obj = json as? [String: Any],
           let five = parseWindow(obj["five_hour"]),

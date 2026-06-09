@@ -9,7 +9,7 @@ import (
 	"runtime"
 )
 
-var errNoCreds = errors.New("Claude Code 자격 증명을 찾지 못했습니다. 로그인 상태를 확인하세요.")
+var errNoCreds = errors.New("could not read credentials")
 
 func extractToken(b []byte) string {
 	var c struct {
@@ -29,7 +29,7 @@ func extractToken(b []byte) string {
 	return ""
 }
 
-// readAccessToken: ~/.claude/.credentials.json 우선(Windows/Linux/macOS), 없으면 macOS 키체인.
+// readAccessToken: prefer ~/.claude/.credentials.json (Windows/Linux/macOS); on macOS fall back to the keychain if absent.
 func readAccessToken() (string, error) {
 	if home, err := os.UserHomeDir(); err == nil {
 		path := filepath.Join(home, ".claude", ".credentials.json")

@@ -66,7 +66,7 @@ swift build -c release && ./.build/release/ClaudeUsageMenuBar
 
 ## Conventions
 
-- **UI strings are Korean.** Keep all user-facing text (tooltips, menu items, errors) in Korean to match existing copy.
+- **UI strings are English (English-only).** Keep all user-facing text (tooltips, menu items, errors) in English. Shared UI strings must read identically across all three ports (e.g. "Refresh Now", "About", "Quit", "Login needed", "resets in 1h 50m", window labels "5h"/"Weekly"/"Weekly Opus"/"Weekly Sonnet").
 - **Config / polling:** VSCode reads `claudeUsage.refreshInterval` / `warnThreshold` / `alertThreshold` from settings; the other three apps use env var `CLAUDE_USAGE_INTERVAL` (seconds, default 300, min 10). Color thresholds 80% (warn) / 95% (alert) are hard-coded in the non-VSCode ports.
 - **No git repo here** — this directory is not under version control.
 - Design notes: `docs/superpowers/specs/2026-06-04-claude-usage-extension-design.md` (note its `0.0–1.0` claim is outdated; see the utilization note above).

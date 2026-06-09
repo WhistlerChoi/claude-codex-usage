@@ -14,13 +14,13 @@ export class UsageStatusBar {
   constructor() {
     this.item = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
     this.item.command = "claudeUsage.refresh";
-    this.item.text = "$(sync~spin) Claude 사용량";
-    this.item.tooltip = "Claude Code 사용량을 불러오는 중...";
+    this.item.text = "$(sync~spin) Claude Usage";
+    this.item.tooltip = "Loading Claude Code usage...";
     this.item.show();
   }
 
   showLoading(): void {
-    this.item.text = "$(sync~spin) Claude 사용량";
+    this.item.text = "$(sync~spin) Claude Usage";
   }
 
   showUsage(
@@ -33,7 +33,7 @@ export class UsageStatusBar {
     this.item.text = statusBarText(usage, model?.name) + (stale ? " $(warning)" : "");
     const md = new vscode.MarkdownString(
       tooltipMarkdown(usage, lastUpdated, new Date(), model) +
-        (stale ? "\n\n⚠ 마지막 갱신 실패 — 이전 값 표시 중" : "")
+        (stale ? "\n\n⚠ Last refresh failed — showing previous value" : "")
     );
     md.isTrusted = false;
     this.item.tooltip = md;
@@ -49,9 +49,9 @@ export class UsageStatusBar {
   }
 
   showError(message: string): void {
-    this.item.text = "$(error) Claude 로그인 필요";
+    this.item.text = "$(error) Claude login required";
     this.item.backgroundColor = new vscode.ThemeColor("statusBarItem.errorBackground");
-    const md = new vscode.MarkdownString(`**사용량을 가져올 수 없습니다**\n\n${message}\n\n클릭하면 다시 시도`);
+    const md = new vscode.MarkdownString(`**Could not fetch usage**\n\n${message}\n\nClick to retry`);
     this.item.tooltip = md;
   }
 

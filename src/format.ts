@@ -2,33 +2,33 @@ import type { UsageData, UsageWindow } from "./usageClient";
 import type { CurrentModel } from "./model";
 
 /**
- * API의 utilization은 이미 퍼센트 단위(0~100)다. 정수로 반올림만 한다.
+ * The API's utilization is already a percent (0-100). Just round to an integer.
  */
 export function pct(utilization: number): number {
   return Math.round(utilization);
 }
 
-/** 상태바 한 줄: "$(pulse) 5h 42% · wk 8% · Opus 4.8" */
+/** Status bar single line: "$(pulse) 5h 42% · wk 8% · Opus 4.8" */
 export function statusBarText(usage: UsageData, modelName?: string): string {
   const base = `$(pulse) 5h ${pct(usage.fiveHour.utilization)}% · wk ${pct(usage.sevenDay.utilization)}%`;
   return modelName ? `${base} · ${modelName}` : base;
 }
 
 /**
- * resetsAt까지 남은 시간을 사람이 읽는 한국어로.
- * now는 테스트를 위해 주입 가능.
+ * Human-readable English time remaining until resetsAt.
+ * now is injectable for tests.
  */
 export function formatResetIn(resetsAt: string | null, now: Date = new Date()): string {
   if (!resetsAt) {
-    return "리셋 시각 미정";
+    return "reset time unknown";
   }
   const target = new Date(resetsAt);
   if (Number.isNaN(target.getTime())) {
-    return "리셋 시각 미정";
+    return "reset time unknown";
   }
   let diffMs = target.getTime() - now.getTime();
   if (diffMs <= 0) {
-    return "곧 리셋";
+    return "resets soon";
   }
   const totalMin = Math.floor(diffMs / 60000);
   const days = Math.floor(totalMin / (60 * 24));
@@ -36,18 +36,18 @@ export function formatResetIn(resetsAt: string | null, now: Date = new Date()): 
   const mins = totalMin % 60;
 
   const parts: string[] = [];
-  if (days > 0) parts.push(`${days}일`);
-  if (hours > 0) parts.push(`${hours}시간`);
-  if (days === 0 && mins > 0) parts.push(`${mins}분`);
-  if (parts.length === 0) parts.push("1분 미만");
-  return `${parts.join(" ")} 후 리셋`;
+  if (days > 0) parts.push(`${days}d`);
+  if (hours > 0) parts.push(`${hours}h`);
+  if (days === 0 && mins > 0) parts.push(`${mins}m`);
+  if (parts.length === 0) parts.push("<1m");
+  return `resets in ${parts.join(" ")}`;
 }
 
 function windowLine(label: string, w: UsageWindow, now: Date): string {
   return `**${label}**: ${pct(w.utilization)}% · ${formatResetIn(w.resetsAt, now)}`;
 }
 
-/** 호버 툴팁 Markdown 본문. */
+/** Hover tooltip Markdown body. */
 export function tooltipMarkdown(
   usage: UsageData,
   lastUpdated: Date,
@@ -55,21 +55,21 @@ export function tooltipMarkdown(
   model?: CurrentModel | null
 ): string {
   const lines: string[] = [
-    "### Claude Code 사용량",
+    "### Claude Code Usage",
     "",
-    windowLine("5시간", usage.fiveHour, now),
-    windowLine("주간", usage.sevenDay, now),
+    windowLine("5h", usage.fiveHour, now),
+    windowLine("Weekly", usage.sevenDay, now),
   ];
   if (usage.sevenDayOpus) {
-    lines.push(windowLine("주간 Opus", usage.sevenDayOpus, now));
+    lines.push(windowLine("Weekly Opus", usage.sevenDayOpus, now));
   }
   if (usage.sevenDaySonnet) {
-    lines.push(windowLine("주간 Sonnet", usage.sevenDaySonnet, now));
+    lines.push(windowLine("Weekly Sonnet", usage.sevenDaySonnet, now));
   }
   if (model) {
-    lines.push("", `**현재 모델**: ${model.name} (\`${model.id}\`)`);
+    lines.push("", `**Current model**: ${model.name} (\`${model.id}\`)`);
   }
-  lines.push("", `_갱신: ${formatClock(lastUpdated)}_`, "", "클릭하면 지금 새로고침");
+  lines.push("", `_Updated: ${formatClock(lastUpdated)}_`, "", "Click to refresh now");
   return lines.join("\n");
 }
 
@@ -81,24 +81,24 @@ function formatClock(d: Date): string {
 }
 
 /**
- * 두 윈도우 중 가장 높은 사용률을 0~1 분수로 반환 (상태바 색상 임계값 비교용).
- * utilization은 퍼센트(0~100)이므로 100으로 나눈다.
+ * Returns the highest utilization of the two windows as a 0-1 fraction (for status bar color threshold comparison).
+ * utilization is a percent (0-100), so divide by 100.
  */
 export function peakUtilization(usage: UsageData): number {
   return Math.max(usage.fiveHour.utilization, usage.sevenDay.utilization) / 100;
 }
 
-/** 재시도 지연 상한(1시간). Retry-After가 비정상적으로 크더라도 무한정 멈추지 않도록. */
+/** Upper bound on retry delay (1 hour). Ensures we never stall indefinitely even if Retry-After is abnormally large. */
 const MAX_RETRY_MS = 3_600_000;
-/** 429 백오프 바닥(60s). rate limiter를 너무 자주 두드려 또 429를 맞지 않도록. */
+/** Floor for 429 backoff (60s). Avoids hammering the rate limiter too often and getting another 429. */
 const RETRY_FLOOR_MS = 60_000;
 
 /**
- * 일시적 실패 후 다음 폴링까지의 지연(ms).
- * - retryAfterMs가 있으면 그 값을 "존중"한다(서버가 지시한 최소 대기). interval로 깎지 않고 MAX로만 cap.
- * - 없으면 60s에서 시작하는 지수 백오프(×2)를 interval(최소 60s)로 cap.
- * 마지막에 0~20% 지터를 더해 동시 폴링 충돌을 분산한다.
- * @param rand 0~1 난수원(테스트 주입용, 기본 Math.random).
+ * Delay (ms) until the next poll after a transient failure.
+ * - If retryAfterMs is present, "respect" it (the server-dictated minimum wait). Do not shrink it with interval; only cap with MAX.
+ * - Otherwise, exponential backoff (×2) starting at 60s, capped at interval (min 60s).
+ * Finally add 0-20% jitter to spread out concurrent poll collisions.
+ * @param rand 0-1 random source (for test injection, defaults to Math.random).
  */
 export function nextRetryDelayMs(
   consecutiveFailures: number,
@@ -116,7 +116,7 @@ export function nextRetryDelayMs(
   return Math.round(base + base * 0.2 * rand());
 }
 
-/** 마지막 성공으로부터 ageMs가 interval*3 이상이면 stale로 표시. */
+/** Mark as stale if ageMs since the last success is at least interval*3. */
 export function shouldShowStale(ageMs: number, intervalMs: number): boolean {
   return ageMs >= intervalMs * 3;
 }

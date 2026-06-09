@@ -8,8 +8,8 @@ export interface CurrentModel {
 }
 
 /**
- * 모델 ID를 사람이 읽는 이름으로 변환 (순수 함수).
- * 예: "claude-opus-4-8" -> "Opus 4.8", "claude-3-5-sonnet-20241022" -> "Sonnet 3.5"
+ * Convert a model ID into a human-readable name (pure function).
+ * e.g. "claude-opus-4-8" -> "Opus 4.8", "claude-3-5-sonnet-20241022" -> "Sonnet 3.5"
  */
 export function friendlyModelName(id: string): string {
   if (!id) {
@@ -27,8 +27,8 @@ export function friendlyModelName(id: string): string {
 }
 
 /**
- * 트랜스크립트(JSONL) 내용에서 마지막 assistant 메시지의 model을 찾는다 (순수 함수).
- * 끝에서부터 스캔해 처음 발견되는 message.model을 반환.
+ * Find the model of the last assistant message in transcript (JSONL) content (pure function).
+ * Scans from the end and returns the first message.model found.
  */
 export function extractLastModel(content: string): string | null {
   const lines = content.split("\n");
@@ -51,7 +51,7 @@ export function extractLastModel(content: string): string | null {
   return null;
 }
 
-/** ~/.claude/projects 아래에서 가장 최근에 수정된 트랜스크립트 경로를 찾는다. */
+/** Find the most recently modified transcript path under ~/.claude/projects. */
 async function latestTranscriptPath(): Promise<string | null> {
   const root = join(homedir(), ".claude", "projects");
   let dirs;
@@ -94,8 +94,8 @@ async function latestTranscriptPath(): Promise<string | null> {
 }
 
 /**
- * 가장 최근 세션에서 사용 중인 모델을 읽는다 (로컬, best-effort).
- * 찾지 못하면 null.
+ * Read the model in use in the most recent session (local, best-effort).
+ * Returns null if not found.
  */
 export async function readCurrentModel(): Promise<CurrentModel | null> {
   const path = await latestTranscriptPath();

@@ -53,16 +53,16 @@ async function refresh(): Promise<void> {
     if (err instanceof AuthError || err instanceof CredentialsError) {
       statusBar.showError(err.message);
       consecutiveFailures = 0;
-      // 인증 오류는 백오프하지 않고 정규 주기로
+      // Auth errors do not back off; stay on the regular interval
     } else {
-      // 일시적 오류: 백오프 재시도
+      // Transient error: retry with backoff
       consecutiveFailures += 1;
       const retryAfterMs =
         err instanceof TransientError ? err.retryAfterMs : undefined;
       nextDelayMs = nextRetryDelayMs(consecutiveFailures, intervalMs, retryAfterMs);
       const ageMs = lastSuccessAt != null ? Date.now() - lastSuccessAt : Infinity;
       if (lastUsage && !shouldShowStale(ageMs, intervalMs)) {
-        // 아직 신선함 → 표시 변화 없음(직전 정상 렌더 유지, no-op)
+        // Still fresh → no display change (keep the last good render, no-op)
       } else if (lastUsage) {
         statusBar.showUsage(lastUsage, new Date(), thresholds, true, lastModel);
       } else {

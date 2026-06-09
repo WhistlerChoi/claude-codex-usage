@@ -1,43 +1,43 @@
-# Claude Usage — 트레이 앱 (Go, 경량)
+# Claude Usage — Tray App (Go, lightweight)
 
-Claude Code 사용량을 시스템 트레이에 표시하는 **Go 네이티브** 앱입니다.
-**단일 exe ~7MB**, 런타임 의존성 없음.
+A **native Go** app that shows Claude Code usage in the system tray.
+**Single exe ~7MB**, no runtime dependencies.
 
-## 표시 방식
+## What it shows
 
-- **아이콘**: 5시간 사용률 숫자 색상 배지 (`42`) — 파랑(정상)/주황(80%↑)/빨강(95%↑)
-- **호버 툴팁**: 5시간·주간·Opus/Sonnet·현재 모델·리셋까지 시간
-- **우클릭 메뉴**: 상세 + `지금 새로고침` / `종료`
+- **Icon**: a colored badge with the 5-hour usage number (`42`) — blue (normal) / orange (80%+) / red (95%+)
+- **Hover tooltip**: 5-hour, weekly, Opus/Sonnet, current model, time until reset
+- **Right-click menu**: details + `Refresh Now` / `Quit`
 
-## 동작 방식
+## How it works
 
-- 사용률: `https://api.anthropic.com/api/oauth/usage`
-- 토큰: `~/.claude/.credentials.json` (Windows: `%USERPROFILE%\.claude\.credentials.json`), macOS는 없으면 키체인
-- 현재 모델: `~/.claude/projects/**/*.jsonl` 중 최신 트랜스크립트의 마지막 `message.model`
+- Usage: `https://api.anthropic.com/api/oauth/usage`
+- Token: `~/.claude/.credentials.json` (Windows: `%USERPROFILE%\.claude\.credentials.json`); on macOS, fall back to the keychain if absent
+- Current model: the last `message.model` from the most recent transcript among `~/.claude/projects/**/*.jsonl`
 
-## 빌드
+## Build
 
 ```bash
-# 맥/리눅스에서 Windows exe 크로스컴파일 (Wine 불필요)
+# Cross-compile a Windows exe on macOS/Linux (no Wine needed)
 ./build-win.sh                 # → ClaudeUsage.exe (~7MB)
 
-# 또는 직접:
+# Or directly:
 GOOS=windows GOARCH=amd64 CGO_ENABLED=0 \
   go build -ldflags "-H windowsgui -s -w" -o ClaudeUsage.exe .
 
-# 현재 OS용으로 실행 (맥/리눅스 테스트)
+# Run on the current OS (macOS/Linux testing)
 go run .
 
-# 아이콘 모양만 PNG로 확인
+# Preview the icon as a PNG only
 go run . --render /tmp/icon.png && open /tmp/icon.png
 ```
 
-생성된 `ClaudeUsage.exe`를 Windows로 복사해 더블클릭하면 트레이에 표시됩니다.
+Copy the generated `ClaudeUsage.exe` to Windows and double-click it to show it in the tray.
 
-## 설정
+## Configuration
 
-- 갱신 주기: 환경변수 `CLAUDE_USAGE_INTERVAL`(초, 기본 300, 최소 10)
+- Refresh interval: env var `CLAUDE_USAGE_INTERVAL` (seconds, default 300, min 10)
 
-## 요구 사항
+## Requirements
 
-빌드: Go 1.23+. 실행: 없음(단일 정적 바이너리). Windows 빌드는 cgo 불필요.
+Build: Go 1.23+. Runtime: none (single static binary). The Windows build does not need cgo.

@@ -1,7 +1,7 @@
 {
   "name": "claude-usage",
   "displayName": "Claude Code Usage",
-  "description": "Claude Code의 5시간/주간 사용률을 상태바에 표시합니다.",
+  "description": "Show Claude Code's 5-hour/weekly usage in the status bar.",
   "version": "0.3.0",
   "publisher": "wemeet",
   "engines": {
@@ -18,7 +18,7 @@
     "commands": [
       {
         "command": "claudeUsage.refresh",
-        "title": "Claude Usage: 지금 새로고침"
+        "title": "Claude Usage: Refresh now"
       }
     ],
     "configuration": {
@@ -28,21 +28,21 @@
           "type": "number",
           "default": 300,
           "minimum": 10,
-          "description": "사용량 갱신 주기(초). 최소 10초."
+          "description": "Usage refresh interval in seconds. Minimum 10 seconds."
         },
         "claudeUsage.warnThreshold": {
           "type": "number",
           "default": 0.8,
           "minimum": 0,
           "maximum": 1,
-          "description": "이 사용률 이상이면 상태바를 경고색으로 표시 (0~1)."
+          "description": "Show the status bar in the warning color at or above this utilization (0-1)."
         },
         "claudeUsage.alertThreshold": {
           "type": "number",
           "default": 0.95,
           "minimum": 0,
           "maximum": 1,
-          "description": "이 사용률 이상이면 상태바를 에러색으로 표시 (0~1)."
+          "description": "Show the status bar in the error color at or above this utilization (0-1)."
         }
       }
     }

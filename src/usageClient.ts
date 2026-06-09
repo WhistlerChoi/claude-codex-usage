@@ -3,9 +3,9 @@ import { readAccessToken } from "./credentials";
 const USAGE_URL = "https://api.anthropic.com/api/oauth/usage";
 
 export interface UsageWindow {
-  /** 0.0 ~ 1.0 */
+  /** percent, 0-100 */
   utilization: number;
-  /** ISO 8601, 없을 수 있음 */
+  /** ISO 8601, may be absent */
   resetsAt: string | null;
 }
 
@@ -18,7 +18,7 @@ export interface UsageData {
 
 export class AuthError extends Error {}
 
-/** 네트워크/5xx/429 등 재시도 가능한 일시적 오류. */
+/** Retryable transient error (network/5xx/429, etc.). */
 export class TransientError extends Error {
   readonly retryAfterMs?: number;
   constructor(message: string, retryAfterMs?: number) {
@@ -27,7 +27,7 @@ export class TransientError extends Error {
   }
 }
 
-/** Retry-After 헤더(정수 초)를 ms로. 없거나 HTTP-date 등 비정수면 undefined. */
+/** Convert the Retry-After header (integer seconds) to ms. undefined if absent or non-integer (e.g. HTTP-date). */
 export function parseRetryAfterMs(header: string | null): number | undefined {
   if (header == null) return undefined;
   const trimmed = header.trim();
@@ -51,13 +51,13 @@ function parseWindow(raw: unknown): UsageWindow | null {
   };
 }
 
-/** API 원시 JSON을 UsageData로 변환 (순수 함수, 테스트 대상). */
+/** Convert raw API JSON into UsageData (pure function, tested). */
 export function parseUsage(json: unknown): UsageData {
   const obj = (json && typeof json === "object" ? json : {}) as Record<string, unknown>;
   const fiveHour = parseWindow(obj.five_hour);
   const sevenDay = parseWindow(obj.seven_day);
   if (!fiveHour || !sevenDay) {
-    throw new Error("usage 응답에 five_hour/seven_day가 없습니다.");
+    throw new Error("usage response is missing five_hour/seven_day.");
   }
   return {
     fiveHour,
@@ -67,7 +67,7 @@ export function parseUsage(json: unknown): UsageData {
   };
 }
 
-/** usage 엔드포인트를 호출해 현재 사용량을 가져온다. */
+/** Call the usage endpoint to fetch current usage. */
 export async function fetchUsage(): Promise<UsageData> {
   const token = await readAccessToken();
 
@@ -79,16 +79,16 @@ export async function fetchUsage(): Promise<UsageData> {
   });
 
   if (res.status === 401 || res.status === 403) {
-    throw new AuthError("인증이 만료되었습니다. Claude Code에서 재로그인하세요.");
+    throw new AuthError("Authentication expired. Log in again.");
   }
   if (res.status === 429) {
     throw new TransientError(
-      `usage API 오류: HTTP 429`,
+      `usage API error: HTTP 429`,
       parseRetryAfterMs(res.headers.get("retry-after"))
     );
   }
   if (!res.ok) {
-    throw new TransientError(`usage API 오류: HTTP ${res.status}`);
+    throw new TransientError(`usage API error: HTTP ${res.status}`);
   }
 
   const json = await res.json();

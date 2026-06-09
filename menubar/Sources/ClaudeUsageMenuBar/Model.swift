@@ -5,7 +5,7 @@ struct CurrentModel {
     let name: String
 }
 
-/// 모델 ID -> 사람이 읽는 이름. "claude-opus-4-8" -> "Opus 4.8"
+/// Model ID -> human-readable name. "claude-opus-4-8" -> "Opus 4.8"
 func friendlyModelName(_ id: String) -> String {
     if id.isEmpty { return "Unknown" }
     let lower = id.lowercased()
@@ -28,7 +28,7 @@ func friendlyModelName(_ id: String) -> String {
     return id
 }
 
-/// 트랜스크립트 내용에서 끝에서부터 마지막 message.model을 찾는다.
+/// Find the last message.model in the transcript content, scanning from the end.
 func extractLastModel(_ content: String) -> String? {
     let lines = content.split(separator: "\n", omittingEmptySubsequences: false)
     for line in lines.reversed() {
@@ -45,7 +45,7 @@ func extractLastModel(_ content: String) -> String? {
     return nil
 }
 
-/// ~/.claude/projects 아래에서 가장 최근 트랜스크립트의 모델을 읽는다.
+/// Read the model from the most recently modified transcript under ~/.claude/projects.
 func readCurrentModel() -> CurrentModel? {
     let fm = FileManager.default
     let root = fm.homeDirectoryForCurrentUser.appendingPathComponent(".claude/projects")

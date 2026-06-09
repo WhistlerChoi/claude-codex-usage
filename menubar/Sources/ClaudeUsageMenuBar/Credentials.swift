@@ -9,7 +9,7 @@ enum CredentialsError: Error, LocalizedError {
     }
 }
 
-/// 자격 증명 JSON Data에서 accessToken 추출. { claudeAiOauth: { accessToken } } 또는 { accessToken }.
+/// Extract accessToken from credentials JSON Data. { claudeAiOauth: { accessToken } } or { accessToken }.
 func extractAccessToken(_ data: Data) -> String? {
     guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
         return nil
@@ -24,7 +24,7 @@ func extractAccessToken(_ data: Data) -> String? {
     return nil
 }
 
-/// macOS 키체인에서 자격 증명 문자열을 읽는다. 없으면 nil.
+/// Read the credentials string from the macOS keychain. Returns nil if absent.
 private func readFromKeychain() -> Data? {
     let proc = Process()
     proc.executableURL = URL(fileURLWithPath: "/usr/bin/security")
@@ -42,8 +42,8 @@ private func readFromKeychain() -> Data? {
     return outPipe.fileHandleForReading.readDataToEndOfFile()
 }
 
-/// Claude Code OAuth accessToken을 읽는다.
-/// 우선 ~/.claude/.credentials.json, 없으면 macOS 키체인.
+/// Read the Claude Code OAuth accessToken.
+/// Prefers ~/.claude/.credentials.json; falls back to the macOS keychain.
 func readAccessToken() throws -> String {
     let home = FileManager.default.homeDirectoryForCurrentUser
     let credPath = home.appendingPathComponent(".claude/.credentials.json")
@@ -53,5 +53,5 @@ func readAccessToken() throws -> String {
     if let data = readFromKeychain(), let tok = extractAccessToken(data) {
         return tok
     }
-    throw CredentialsError.notFound("Claude Code 자격 증명을 찾지 못했습니다. 로그인 상태를 확인하세요.")
+    throw CredentialsError.notFound("Could not read credentials. Log in with Claude Code.")
 }

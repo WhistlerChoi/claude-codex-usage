@@ -30,7 +30,7 @@ const (
 )
 
 func main() {
-	// --render [out.png]: 아이콘 이미지를 PNG로 저장하고 종료 (검증용)
+	// --render [out.png]: save the icon image as a PNG and exit (for verification)
 	if len(os.Args) > 1 && os.Args[1] == "--render" {
 		out := "/tmp/icon.png"
 		if len(os.Args) > 2 {
@@ -45,7 +45,7 @@ func main() {
 
 func onReady() {
 	systray.SetTitle("")
-	systray.SetTooltip("Claude 사용량 불러오는 중...")
+	systray.SetTooltip("Claude Usage Loading...")
 
 	for i := 0; i < 6; i++ {
 		it := systray.AddMenuItem("", "")
@@ -53,8 +53,8 @@ func onReady() {
 		detailItems = append(detailItems, it)
 	}
 	systray.AddSeparator()
-	mRefresh = systray.AddMenuItem("지금 새로고침", "")
-	mQuit = systray.AddMenuItem("종료", "")
+	mRefresh = systray.AddMenuItem("Refresh Now", "")
+	mQuit = systray.AddMenuItem("Quit", "")
 
 	go pollLoop()
 	go func() {
@@ -108,14 +108,14 @@ func refresh(interval time.Duration) time.Duration {
 			consecutiveFailures = 0
 			return interval
 		}
-		// 일시적 오류: 백오프 재시도
+		// transient error: retry with backoff
 		consecutiveFailures++
-		age := time.Duration(1 << 62) // lastSuccessAt 없으면 사실상 무한대
+		age := time.Duration(1 << 62) // effectively infinite if lastSuccessAt is unset
 		if !lastSuccessAt.IsZero() {
 			age = time.Since(lastSuccessAt)
 		}
 		if lastUsage != nil && !shouldShowStale(age, interval) {
-			// 아직 신선함 → 표시 변화 없음(no-op)
+			// still fresh → no display change (no-op)
 		} else if lastUsage != nil {
 			applyUsage(lastUsage, lastModel, true)
 		} else {
@@ -146,17 +146,17 @@ func bgFor(u *usageResp) string {
 func detailLines(u *usageResp, model *currentModel) []string {
 	now := time.Now()
 	lines := []string{
-		fmt.Sprintf("5시간: %d%% · %s", pct(u.FiveHour.Utilization), formatResetIn(u.FiveHour.ResetsAt, now)),
-		fmt.Sprintf("주간: %d%% · %s", pct(u.SevenDay.Utilization), formatResetIn(u.SevenDay.ResetsAt, now)),
+		fmt.Sprintf("5h: %d%% · %s", pct(u.FiveHour.Utilization), formatResetIn(u.FiveHour.ResetsAt, now)),
+		fmt.Sprintf("Weekly: %d%% · %s", pct(u.SevenDay.Utilization), formatResetIn(u.SevenDay.ResetsAt, now)),
 	}
 	if u.SevenDayOpus != nil {
-		lines = append(lines, fmt.Sprintf("주간 Opus: %d%% · %s", pct(u.SevenDayOpus.Utilization), formatResetIn(u.SevenDayOpus.ResetsAt, now)))
+		lines = append(lines, fmt.Sprintf("Weekly Opus: %d%% · %s", pct(u.SevenDayOpus.Utilization), formatResetIn(u.SevenDayOpus.ResetsAt, now)))
 	}
 	if u.SevenDaySonnet != nil {
-		lines = append(lines, fmt.Sprintf("주간 Sonnet: %d%% · %s", pct(u.SevenDaySonnet.Utilization), formatResetIn(u.SevenDaySonnet.ResetsAt, now)))
+		lines = append(lines, fmt.Sprintf("Weekly Sonnet: %d%% · %s", pct(u.SevenDaySonnet.Utilization), formatResetIn(u.SevenDaySonnet.ResetsAt, now)))
 	}
 	if model != nil {
-		lines = append(lines, fmt.Sprintf("현재 모델: %s (%s)", model.Name, model.ID))
+		lines = append(lines, fmt.Sprintf("Current model: %s (%s)", model.Name, model.ID))
 	}
 	return lines
 }
@@ -167,9 +167,9 @@ func applyUsage(u *usageResp, model *currentModel, stale bool) {
 	lines := detailLines(u, model)
 	shown := lines
 	if stale {
-		shown = append([]string{"⚠ 갱신 실패 — 이전 값 표시 중"}, lines...)
+		shown = append([]string{"⚠ Refresh failed — showing last value"}, lines...)
 	}
-	systray.SetTooltip("Claude 사용량\n" + strings.Join(shown, "\n"))
+	systray.SetTooltip("Claude Usage\n" + strings.Join(shown, "\n"))
 
 	for i, it := range detailItems {
 		if i < len(shown) {
@@ -183,7 +183,7 @@ func applyUsage(u *usageResp, model *currentModel, stale bool) {
 
 func applyError(message string) {
 	systray.SetIcon(iconBytes("!", colorError))
-	systray.SetTooltip("Claude 사용량\n⚠ " + message)
+	systray.SetTooltip("Claude Usage\n⚠ " + message)
 	for i, it := range detailItems {
 		if i == 0 {
 			it.SetTitle(message)

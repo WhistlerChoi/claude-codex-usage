@@ -66,7 +66,7 @@ func inRoundRect(x, y, size, r int) bool {
 	return true
 }
 
-// renderIconPNG: 라운드 사각형 배경 + 흰 숫자를 그린 32x32 PNG.
+// renderIconPNG: a 32x32 PNG with a rounded-rectangle background and white digits.
 func renderIconPNG(text, bgHex string) []byte {
 	img := image.NewRGBA(image.Rect(0, 0, iconSize, iconSize))
 	bg := parseHex(bgHex)
@@ -78,7 +78,7 @@ func renderIconPNG(text, bgHex string) []byte {
 		}
 	}
 
-	// 숫자를 작은 비트맵 폰트로 그린 뒤 확대해 가운데 배치
+	// draw the digits with a small bitmap font, then scale up and center them
 	tw := 7 * len(text)
 	th := 13
 	tmp := image.NewRGBA(image.Rect(0, 0, tw, th))
@@ -104,7 +104,7 @@ func renderIconPNG(text, bgHex string) []byte {
 	return buf.Bytes()
 }
 
-// iconBytes: Windows는 ICO, 그 외는 PNG.
+// iconBytes: ICO on Windows, PNG elsewhere.
 func iconBytes(text, bgHex string) []byte {
 	pngBytes := renderIconPNG(text, bgHex)
 	if runtime.GOOS == "windows" {
@@ -113,7 +113,7 @@ func iconBytes(text, bgHex string) []byte {
 	return pngBytes
 }
 
-// pngToICO: PNG를 그대로 담는 ICO(아이콘) 바이트 생성 (Windows Vista+ PNG 압축 아이콘).
+// pngToICO: build ICO (icon) bytes that embed the PNG as-is (Windows Vista+ PNG-compressed icon).
 func pngToICO(pngBytes []byte) []byte {
 	var buf bytes.Buffer
 	// ICONDIR
