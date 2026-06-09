@@ -88,21 +88,32 @@ export function peakUtilization(usage: UsageData): number {
   return Math.max(usage.fiveHour.utilization, usage.sevenDay.utilization) / 100;
 }
 
+/** 재시도 지연 상한(1시간). Retry-After가 비정상적으로 크더라도 무한정 멈추지 않도록. */
+const MAX_RETRY_MS = 3_600_000;
+/** 429 백오프 바닥(60s). rate limiter를 너무 자주 두드려 또 429를 맞지 않도록. */
+const RETRY_FLOOR_MS = 60_000;
+
 /**
  * 일시적 실패 후 다음 폴링까지의 지연(ms).
- * retryAfterMs가 주어지면 그 값을 interval로 cap. 아니면 지수 백오프(base 10s, ×2)를 interval로 cap.
+ * - retryAfterMs가 있으면 그 값을 "존중"한다(서버가 지시한 최소 대기). interval로 깎지 않고 MAX로만 cap.
+ * - 없으면 60s에서 시작하는 지수 백오프(×2)를 interval(최소 60s)로 cap.
+ * 마지막에 0~20% 지터를 더해 동시 폴링 충돌을 분산한다.
+ * @param rand 0~1 난수원(테스트 주입용, 기본 Math.random).
  */
 export function nextRetryDelayMs(
   consecutiveFailures: number,
   intervalMs: number,
-  retryAfterMs?: number
+  retryAfterMs?: number,
+  rand: () => number = Math.random
 ): number {
+  let base: number;
   if (retryAfterMs != null && retryAfterMs > 0) {
-    return Math.min(retryAfterMs, intervalMs);
+    base = Math.min(retryAfterMs, MAX_RETRY_MS);
+  } else {
+    const exp = RETRY_FLOOR_MS * 2 ** Math.max(0, consecutiveFailures - 1);
+    base = Math.min(exp, Math.max(intervalMs, RETRY_FLOOR_MS));
   }
-  const base = 10_000;
-  const exp = base * 2 ** Math.max(0, consecutiveFailures - 1);
-  return Math.min(exp, intervalMs);
+  return Math.round(base + base * 0.2 * rand());
 }
 
 /** 마지막 성공으로부터 ageMs가 interval*3 이상이면 stale로 표시. */

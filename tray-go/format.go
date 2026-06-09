@@ -78,26 +78,39 @@ func peakUtilization(u *usageResp) float64 {
 	return math.Max(u.FiveHour.Utilization, u.SevenDay.Utilization) / 100
 }
 
+const maxRetry = 3600 * time.Second // 재시도 지연 상한(1시간)
+const retryFloor = 60 * time.Second  // 429 백오프 바닥(60s)
+
 // nextRetryDelay: 일시적 실패 후 다음 폴링까지 지연.
-// retryAfter>0이면 그 값을 interval로 cap, 아니면 지수 백오프(base 10s, ×2)를 interval로 cap.
-func nextRetryDelay(consecutiveFailures int, interval, retryAfter time.Duration) time.Duration {
+//   - retryAfter>0이면 그 값을 "존중"한다(interval로 깎지 않고 maxRetry로만 cap).
+//   - 없으면 60s에서 시작하는 지수 백오프(×2)를 interval(최소 60s)로 cap.
+//
+// jitter(0~1)만큼 base의 0~20%를 더해 동시 폴링 충돌을 분산한다.
+func nextRetryDelay(consecutiveFailures int, interval, retryAfter time.Duration, jitter float64) time.Duration {
+	var base time.Duration
 	if retryAfter > 0 {
-		if retryAfter > interval {
-			return interval
+		base = retryAfter
+		if base > maxRetry {
+			base = maxRetry
 		}
-		return retryAfter
-	}
-	exp := 10 * time.Second
-	for i := 1; i < consecutiveFailures; i++ {
-		exp *= 2
-		if exp >= interval {
-			return interval
+	} else {
+		ceiling := interval
+		if ceiling < retryFloor {
+			ceiling = retryFloor
+		}
+		base = retryFloor
+		for i := 1; i < consecutiveFailures; i++ {
+			base *= 2
+			if base >= ceiling {
+				base = ceiling
+				break
+			}
+		}
+		if base > ceiling {
+			base = ceiling
 		}
 	}
-	if exp > interval {
-		return interval
-	}
-	return exp
+	return base + time.Duration(float64(base)*0.2*jitter)
 }
 
 // shouldShowStale: 마지막 성공으로부터 age가 interval*3 이상이면 stale.

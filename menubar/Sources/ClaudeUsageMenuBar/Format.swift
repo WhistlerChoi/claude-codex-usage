@@ -51,15 +51,27 @@ func clockString(_ d: Date) -> String {
     return f.string(from: d)
 }
 
+private let maxRetry: TimeInterval = 3600   // 재시도 지연 상한(1시간)
+private let retryFloor: TimeInterval = 60   // 429 백오프 바닥(60s)
+
 /// 일시적 실패 후 다음 폴링까지 지연(초).
-/// retryAfter가 있으면 interval로 cap, 아니면 지수 백오프(base 10s, ×2)를 interval로 cap.
-func nextRetryDelay(_ consecutiveFailures: Int, _ interval: TimeInterval, _ retryAfter: TimeInterval?) -> TimeInterval {
+/// - retryAfter가 있으면 그 값을 "존중"한다(interval로 깎지 않고 maxRetry로만 cap).
+/// - 없으면 60s에서 시작하는 지수 백오프(×2)를 interval(최소 60s)로 cap.
+/// 마지막에 base의 0~20% 지터를 더해 동시 폴링 충돌을 분산한다.
+/// - Parameter rand: 0~1 난수원(테스트 주입용, 기본 Double.random).
+func nextRetryDelay(
+    _ consecutiveFailures: Int, _ interval: TimeInterval, _ retryAfter: TimeInterval?,
+    rand: () -> Double = { Double.random(in: 0..<1) }
+) -> TimeInterval {
+    let base: TimeInterval
     if let ra = retryAfter, ra > 0 {
-        return min(ra, interval)
+        base = min(ra, maxRetry)
+    } else {
+        let ceiling = max(interval, retryFloor)
+        let exp = retryFloor * pow(2.0, Double(max(0, consecutiveFailures - 1)))
+        base = min(exp, ceiling)
     }
-    let base: TimeInterval = 10
-    let exp = base * pow(2.0, Double(max(0, consecutiveFailures - 1)))
-    return min(exp, interval)
+    return base + base * 0.2 * rand()
 }
 
 /// 마지막 성공으로부터 age가 interval*3 이상이면 stale.

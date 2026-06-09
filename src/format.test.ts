@@ -68,25 +68,33 @@ test("tooltipMarkdown includes sonnet but not opus when opus null", () => {
   assert.doesNotMatch(md, /주간 Opus/);
 });
 
-test("nextRetryDelayMs: 지수 백오프, base 10s, ×2", () => {
+const noJitter = () => 0; // 지터 0 → base 그대로
+
+test("nextRetryDelayMs: 지수 백오프, 바닥 60s, ×2", () => {
   const interval = 300_000;
-  assert.equal(nextRetryDelayMs(1, interval), 10_000);
-  assert.equal(nextRetryDelayMs(2, interval), 20_000);
-  assert.equal(nextRetryDelayMs(3, interval), 40_000);
-  assert.equal(nextRetryDelayMs(4, interval), 80_000);
+  assert.equal(nextRetryDelayMs(1, interval, undefined, noJitter), 60_000);
+  assert.equal(nextRetryDelayMs(2, interval, undefined, noJitter), 120_000);
+  assert.equal(nextRetryDelayMs(3, interval, undefined, noJitter), 240_000);
 });
 
 test("nextRetryDelayMs: interval로 cap", () => {
   const interval = 300_000;
-  assert.equal(nextRetryDelayMs(6, interval), 300_000); // 10s*2^5=320s > 300s
-  assert.equal(nextRetryDelayMs(99, interval), 300_000);
+  assert.equal(nextRetryDelayMs(4, interval, undefined, noJitter), 300_000); // 60s*2^3=480s > 300s
+  assert.equal(nextRetryDelayMs(99, interval, undefined, noJitter), 300_000);
 });
 
-test("nextRetryDelayMs: retryAfter 우선, interval로 cap", () => {
+test("nextRetryDelayMs: retryAfter는 존중(interval로 깎지 않음), MAX로만 cap", () => {
   const interval = 300_000;
-  assert.equal(nextRetryDelayMs(1, interval, 45_000), 45_000);
-  assert.equal(nextRetryDelayMs(1, interval, 600_000), 300_000);
-  assert.equal(nextRetryDelayMs(1, interval, 0), 10_000); // 0이면 무시하고 백오프
+  assert.equal(nextRetryDelayMs(1, interval, 45_000, noJitter), 45_000);
+  assert.equal(nextRetryDelayMs(1, interval, 600_000, noJitter), 600_000); // interval 넘어도 존중
+  assert.equal(nextRetryDelayMs(1, interval, 5_000_000, noJitter), 3_600_000); // 1h MAX cap
+  assert.equal(nextRetryDelayMs(1, interval, 0, noJitter), 60_000); // 0이면 무시하고 바닥 백오프
+});
+
+test("nextRetryDelayMs: 지터는 base의 0~20% 가산", () => {
+  const interval = 300_000;
+  assert.equal(nextRetryDelayMs(1, interval, undefined, () => 1), 72_000); // 60s + 20%
+  assert.equal(nextRetryDelayMs(1, interval, 100_000, () => 1), 120_000); // 100s + 20%
 });
 
 test("shouldShowStale: age >= interval*3", () => {

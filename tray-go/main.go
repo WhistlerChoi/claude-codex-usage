@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"math/rand"
 	"os"
 	"strconv"
 	"strings"
@@ -120,7 +121,7 @@ func refresh(interval time.Duration) time.Duration {
 		} else {
 			applyError(err.Error())
 		}
-		return nextRetryDelay(consecutiveFailures, interval, retryAfterFrom(err))
+		return nextRetryDelay(consecutiveFailures, interval, retryAfterFrom(err), rand.Float64())
 	}
 	model, _ := readCurrentModel()
 	lastUsage, lastModel = usage, model
