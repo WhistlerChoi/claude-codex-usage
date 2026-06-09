@@ -45,7 +45,7 @@ func main() {
 
 func onReady() {
 	systray.SetTitle("")
-	systray.SetTooltip("Claude Usage Loading...")
+	systray.SetTooltip("Pulse Loading...")
 
 	for i := 0; i < 6; i++ {
 		it := systray.AddMenuItem("", "")
@@ -169,7 +169,7 @@ func applyUsage(u *usageResp, model *currentModel, stale bool) {
 	if stale {
 		shown = append([]string{"⚠ Refresh failed — showing last value"}, lines...)
 	}
-	systray.SetTooltip("Claude Usage\n" + strings.Join(shown, "\n"))
+	systray.SetTooltip("Pulse\n" + strings.Join(shown, "\n"))
 
 	for i, it := range detailItems {
 		if i < len(shown) {
@@ -183,7 +183,7 @@ func applyUsage(u *usageResp, model *currentModel, stale bool) {
 
 func applyError(message string) {
 	systray.SetIcon(iconBytes("!", colorError))
-	systray.SetTooltip("Claude Usage\n⚠ " + message)
+	systray.SetTooltip("Pulse\n⚠ " + message)
 	for i, it := range detailItems {
 		if i == 0 {
 			it.SetTitle(message)

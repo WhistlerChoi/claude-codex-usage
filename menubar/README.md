@@ -1,4 +1,4 @@
-# Claude Usage — macOS menu-bar app
+# Pulse — macOS menu-bar app
 
 A native Swift app that always shows the same info as the VSCode extension (5-hour / weekly usage + current model) in the **macOS menu bar (top right)**.
 
@@ -25,17 +25,17 @@ It uses the same source as the VSCode extension (ported to Swift):
 ```bash
 # 1) Make a double-clickable .app (recommended)
 ./build-app.sh
-open ./ClaudeUsageMenuBar.app          # or double-click in Finder
+open ./Pulse.app          # or double-click in Finder
 
 # 2) Run directly from the terminal
 swift build -c release
-./.build/release/ClaudeUsageMenuBar
+./.build/release/Pulse
 
 # Print the values once (no menu bar)
-./.build/release/ClaudeUsageMenuBar --once
+./.build/release/Pulse --once
 ```
 
-To quit: click the menu-bar icon → `Quit` (or `pkill -f ClaudeUsageMenuBar`).
+To quit: click the menu-bar icon → `Quit` (or `pkill -f Pulse`).
 
 ## Settings / fine-tuning
 
@@ -51,19 +51,19 @@ The two-line display is drawn into an image sized to the menu-bar height. If the
 
 **When running from the terminal** — use env vars:
 ```bash
-CLAUDE_USAGE_LINE_GAP=12 CLAUDE_USAGE_FONT_SIZE=9 ./.build/release/ClaudeUsageMenuBar
+CLAUDE_USAGE_LINE_GAP=12 CLAUDE_USAGE_FONT_SIZE=9 ./.build/release/Pulse
 ```
 
 **For the double-clicked .app** (env vars do not apply, so use `defaults`):
 ```bash
-defaults write com.wemeet.claude-usage-menubar LineGap 12
-defaults write com.wemeet.claude-usage-menubar FontSize 9
+defaults write com.wemeet.pulse LineGap 12
+defaults write com.wemeet.pulse FontSize 9
 # To apply: quit and relaunch the app
 ```
 
 Preview just the display appearance as a PNG:
 ```bash
-CLAUDE_USAGE_LINE_GAP=12 ./.build/release/ClaudeUsageMenuBar --render /tmp/preview.png
+CLAUDE_USAGE_LINE_GAP=12 ./.build/release/Pulse --render /tmp/preview.png
 open /tmp/preview.png
 ```
 

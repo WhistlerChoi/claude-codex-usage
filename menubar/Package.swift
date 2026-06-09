@@ -2,12 +2,12 @@
 import PackageDescription
 
 let package = Package(
-    name: "ClaudeUsageMenuBar",
+    name: "Pulse",
     platforms: [.macOS(.v13)],
     targets: [
         .executableTarget(
-            name: "ClaudeUsageMenuBar",
-            path: "Sources/ClaudeUsageMenuBar",
+            name: "Pulse",
+            path: "Sources/Pulse",
             resources: [.copy("Resources/header.png")]
         )
     ]

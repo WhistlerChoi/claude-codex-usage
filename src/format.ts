@@ -55,7 +55,7 @@ export function tooltipMarkdown(
   model?: CurrentModel | null
 ): string {
   const lines: string[] = [
-    "### Claude Code Usage",
+    "### Pulse",
     "",
     windowLine("5h", usage.fiveHour, now),
     windowLine("Weekly", usage.sevenDay, now),

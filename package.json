@@ -1,6 +1,6 @@
 {
-  "name": "claude-usage",
-  "displayName": "Claude Code Usage",
+  "name": "pulse",
+  "displayName": "Pulse for Claude Code",
   "description": "Show Claude Code's 5-hour/weekly usage in the status bar.",
   "version": "0.3.0",
   "publisher": "wemeet",
@@ -17,27 +17,27 @@
   "contributes": {
     "commands": [
       {
-        "command": "claudeUsage.refresh",
-        "title": "Claude Usage: Refresh now"
+        "command": "pulse.refresh",
+        "title": "Pulse: Refresh now"
       }
     ],
     "configuration": {
-      "title": "Claude Code Usage",
+      "title": "Pulse for Claude Code",
       "properties": {
-        "claudeUsage.refreshInterval": {
+        "pulse.refreshInterval": {
           "type": "number",
           "default": 300,
           "minimum": 10,
           "description": "Usage refresh interval in seconds. Minimum 10 seconds."
         },
-        "claudeUsage.warnThreshold": {
+        "pulse.warnThreshold": {
           "type": "number",
           "default": 0.8,
           "minimum": 0,
           "maximum": 1,
           "description": "Show the status bar in the warning color at or above this utilization (0-1)."
         },
-        "claudeUsage.alertThreshold": {
+        "pulse.alertThreshold": {
           "type": "number",
           "default": 0.95,
           "minimum": 0,

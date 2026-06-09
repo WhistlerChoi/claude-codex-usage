@@ -14,7 +14,7 @@ let consecutiveFailures = 0;
 let inFlight = false;
 
 function readConfig(): { intervalMs: number; thresholds: Thresholds } {
-  const cfg = vscode.workspace.getConfiguration("claudeUsage");
+  const cfg = vscode.workspace.getConfiguration("pulse");
   const intervalSec = Math.max(10, cfg.get<number>("refreshInterval", 300));
   return {
     intervalMs: intervalSec * 1000,
@@ -81,7 +81,7 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push({ dispose: () => statusBar.dispose() });
 
   context.subscriptions.push(
-    vscode.commands.registerCommand("claudeUsage.refresh", () => {
+    vscode.commands.registerCommand("pulse.refresh", () => {
       if (!inFlight) {
         statusBar.showLoading();
       }
@@ -91,7 +91,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
   context.subscriptions.push(
     vscode.workspace.onDidChangeConfiguration((e) => {
-      if (e.affectsConfiguration("claudeUsage")) {
+      if (e.affectsConfiguration("pulse")) {
         void refresh();
       }
     })

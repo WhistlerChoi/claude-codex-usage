@@ -1,4 +1,4 @@
-# Claude Usage — Tray App (Go, lightweight)
+# Pulse — Tray App (Go, lightweight)
 
 A **native Go** app that shows Claude Code usage in the system tray.
 **Single exe ~7MB**, no runtime dependencies.
@@ -19,11 +19,11 @@ A **native Go** app that shows Claude Code usage in the system tray.
 
 ```bash
 # Cross-compile a Windows exe on macOS/Linux (no Wine needed)
-./build-win.sh                 # → ClaudeUsage.exe (~7MB)
+./build-win.sh                 # → Pulse.exe (~7MB)
 
 # Or directly:
 GOOS=windows GOARCH=amd64 CGO_ENABLED=0 \
-  go build -ldflags "-H windowsgui -s -w" -o ClaudeUsage.exe .
+  go build -ldflags "-H windowsgui -s -w" -o Pulse.exe .
 
 # Run on the current OS (macOS/Linux testing)
 go run .
@@ -32,7 +32,7 @@ go run .
 go run . --render /tmp/icon.png && open /tmp/icon.png
 ```
 
-Copy the generated `ClaudeUsage.exe` to Windows and double-click it to show it in the tray.
+Copy the generated `Pulse.exe` to Windows and double-click it to show it in the tray.
 
 ## Configuration
 

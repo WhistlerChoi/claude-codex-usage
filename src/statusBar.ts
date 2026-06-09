@@ -13,14 +13,14 @@ export class UsageStatusBar {
 
   constructor() {
     this.item = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
-    this.item.command = "claudeUsage.refresh";
-    this.item.text = "$(sync~spin) Claude Usage";
+    this.item.command = "pulse.refresh";
+    this.item.text = "$(sync~spin) Pulse";
     this.item.tooltip = "Loading Claude Code usage...";
     this.item.show();
   }
 
   showLoading(): void {
-    this.item.text = "$(sync~spin) Claude Usage";
+    this.item.text = "$(sync~spin) Pulse";
   }
 
   showUsage(

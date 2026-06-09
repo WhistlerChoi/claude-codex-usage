@@ -117,7 +117,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             contentRect: NSRect(x: 0, y: 0, width: 460, height: 340),
             styleMask: [.titled, .closable],
             backing: .buffered, defer: false)
-        win.title = "About Claude Usage"
+        win.title = "About Pulse"
         win.isReleasedWhenClosed = false
         win.contentView = makeAboutContentView(version: version)
 

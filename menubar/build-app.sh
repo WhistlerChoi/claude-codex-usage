@@ -1,10 +1,10 @@
 #!/bin/bash
-# Build the ClaudeUsageMenuBar.app bundle (for double-click launch).
+# Build the Pulse.app bundle (for double-click launch).
 set -euo pipefail
 cd "$(dirname "$0")"
 
-APP="ClaudeUsageMenuBar.app"
-BIN_NAME="ClaudeUsageMenuBar"
+APP="Pulse.app"
+BIN_NAME="Pulse"
 
 echo "▶ Release build..."
 swift build -c release
@@ -26,9 +26,9 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <key>CFBundleName</key><string>Claude Usage</string>
-  <key>CFBundleDisplayName</key><string>Claude Usage</string>
-  <key>CFBundleIdentifier</key><string>com.wemeet.claude-usage-menubar</string>
+  <key>CFBundleName</key><string>Pulse</string>
+  <key>CFBundleDisplayName</key><string>Pulse</string>
+  <key>CFBundleIdentifier</key><string>com.wemeet.pulse</string>
   <key>CFBundleVersion</key><string>0.1.0</string>
   <key>CFBundleShortVersionString</key><string>0.1.0</string>
   <key>CFBundlePackageType</key><string>APPL</string>

@@ -12,7 +12,7 @@ Three front-ends that display Claude Code's **5-hour / weekly usage** (and curre
 | `tray-go/` | Windows/macOS tray, lightweight (~7MB exe) | Go (`getlantern/systray`) — core re-ported |
 | `menubar/` | macOS menu bar | Swift / AppKit — core re-ported |
 
-`src/` is the source of truth. `tray-go/` and `menubar/` are hand-ports of the same four-module design, so **a logic change in `src/` must be mirrored** into `tray-go/*.go` and `menubar/Sources/ClaudeUsageMenuBar/*.swift`.
+`src/` is the source of truth. `tray-go/` and `menubar/` are hand-ports of the same four-module design, so **a logic change in `src/` must be mirrored** into `tray-go/*.go` and `menubar/Sources/Pulse/*.swift`.
 
 ## Shared architecture (same 4 modules in every implementation)
 
@@ -45,28 +45,28 @@ node --test --import tsx ./src/format.test.ts   # single test file
 npm run compile             # dev bundle → dist/extension.js
 npm run package             # production (minified) bundle
 npm run watch               # rebuild on change
-npx @vscode/vsce package    # → claude-usage-<version>.vsix
+npx @vscode/vsce package    # → pulse-<version>.vsix
 ```
-Debug: open the repo in VSCode, press `F5` (Extension Development Host). Install: `code --install-extension claude-usage-<version>.vsix`.
+Debug: open the repo in VSCode, press `F5` (Extension Development Host). Install: `code --install-extension pulse-<version>.vsix`.
 
 **Go tray (`tray-go/`)** — from `tray-go/`:
 ```bash
-./build-win.sh                 # cross-compile → ClaudeUsage.exe (~7MB, no cgo)
+./build-win.sh                 # cross-compile → Pulse.exe (~7MB, no cgo)
 go run .                       # run on current OS
 go run . --render /tmp/icon.png && open /tmp/icon.png   # preview icon only
 ```
 
 **Swift menu bar (`menubar/`)** — from `menubar/`:
 ```bash
-./build-app.sh                 # → ClaudeUsageMenuBar.app
-swift build -c release && ./.build/release/ClaudeUsageMenuBar
-./.build/release/ClaudeUsageMenuBar --once     # print values once, no menu bar
-./.build/release/ClaudeUsageMenuBar --render /tmp/preview.png   # preview rendered title
+./build-app.sh                 # → Pulse.app
+swift build -c release && ./.build/release/Pulse
+./.build/release/Pulse --once     # print values once, no menu bar
+./.build/release/Pulse --render /tmp/preview.png   # preview rendered title
 ```
 
 ## Conventions
 
 - **UI strings are English (English-only).** Keep all user-facing text (tooltips, menu items, errors) in English. Shared UI strings must read identically across all three ports (e.g. "Refresh Now", "About", "Quit", "Login needed", "resets in 1h 50m", window labels "5h"/"Weekly"/"Weekly Opus"/"Weekly Sonnet").
-- **Config / polling:** VSCode reads `claudeUsage.refreshInterval` / `warnThreshold` / `alertThreshold` from settings; the other three apps use env var `CLAUDE_USAGE_INTERVAL` (seconds, default 300, min 10). Color thresholds 80% (warn) / 95% (alert) are hard-coded in the non-VSCode ports.
+- **Config / polling:** VSCode reads `pulse.refreshInterval` / `warnThreshold` / `alertThreshold` from settings; the other three apps use env var `CLAUDE_USAGE_INTERVAL` (seconds, default 300, min 10). Color thresholds 80% (warn) / 95% (alert) are hard-coded in the non-VSCode ports.
 - **No git repo here** — this directory is not under version control.
 - Design notes: `docs/superpowers/specs/2026-06-04-claude-usage-extension-design.md` (note its `0.0–1.0` claim is outdated; see the utilization note above).

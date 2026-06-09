@@ -1,4 +1,4 @@
-module claude-usage-tray
+module pulse-tray
 
 go 1.23
 

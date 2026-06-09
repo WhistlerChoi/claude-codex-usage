@@ -1,4 +1,4 @@
-# Claude Code Usage
+# Pulse
 
 Always-visible display of Claude Code's **5-hour / weekly usage** (plus the current model).
 It reads the same data the `/usage` command uses, and offers the same core logic across three platform UIs.
@@ -46,9 +46,9 @@ Where the auth token is read from (cross-OS, auto-detected):
 
 | Setting | Default | Description |
 |---|---|---|
-| `claudeUsage.refreshInterval` | `300` | Refresh interval in seconds (minimum 10) |
-| `claudeUsage.warnThreshold` | `0.8` | Usage threshold for the warning color (0–1) |
-| `claudeUsage.alertThreshold` | `0.95` | Usage threshold for the alert color (0–1) |
+| `pulse.refreshInterval` | `300` | Refresh interval in seconds (minimum 10) |
+| `pulse.warnThreshold` | `0.8` | Usage threshold for the warning color (0–1) |
+| `pulse.alertThreshold` | `0.95` | Usage threshold for the alert color (0–1) |
 
 ## Development / Build
 
@@ -61,4 +61,4 @@ npx @vscode/vsce package   # build .vsix
 
 Debugging: open this folder in VSCode and press `F5` (Extension Development Host).
 
-Install: `code --install-extension claude-usage-0.1.0.vsix`
+Install: `code --install-extension pulse-0.3.0.vsix`
