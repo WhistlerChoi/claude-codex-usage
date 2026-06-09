@@ -12,6 +12,13 @@ struct UsageData {
     let sevenDaySonnet: UsageWindow?
 }
 
+/// One aligned row of the menu usage table: label | percent | reset text.
+struct UsageRow {
+    let label: String   // "5h", "Weekly", "Weekly Opus", "Weekly Sonnet"
+    let pct: Int         // 0-100
+    let reset: String    // already-formatted, e.g. "resets in 4h 26m"
+}
+
 enum UsageError: Error, LocalizedError {
     case auth
     case http(Int)

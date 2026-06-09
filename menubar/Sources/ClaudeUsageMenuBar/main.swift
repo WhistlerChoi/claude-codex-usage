@@ -252,21 +252,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             color: colorForPeak(peakUtilization(usage))
         )
 
-        var lines: [String] = [
-            "5h: \(pct(usage.fiveHour.utilization))% · \(formatResetIn(usage.fiveHour.resetsAt))",
-            "Weekly: \(pct(usage.sevenDay.utilization))% · \(formatResetIn(usage.sevenDay.resetsAt))",
+        var rows: [UsageRow] = [
+            UsageRow(label: "5h", pct: pct(usage.fiveHour.utilization),
+                     reset: formatResetIn(usage.fiveHour.resetsAt)),
+            UsageRow(label: "Weekly", pct: pct(usage.sevenDay.utilization),
+                     reset: formatResetIn(usage.sevenDay.resetsAt)),
         ]
         if let opus = usage.sevenDayOpus {
-            lines.append("Weekly Opus: \(pct(opus.utilization))% · \(formatResetIn(opus.resetsAt))")
+            rows.append(UsageRow(label: "Opus", pct: pct(opus.utilization),
+                                 reset: formatResetIn(opus.resetsAt)))
         }
         if let sonnet = usage.sevenDaySonnet {
-            lines.append("Weekly Sonnet: \(pct(sonnet.utilization))% · \(formatResetIn(sonnet.resetsAt))")
+            rows.append(UsageRow(label: "Sonnet", pct: pct(sonnet.utilization),
+                                 reset: formatResetIn(sonnet.resetsAt)))
         }
+
+        var footer: [String] = []
         if let model = model {
-            lines.append("Current model: \(model.name) (\(model.id))")
+            footer.append("Current model: \(model.name) (\(model.id))")
         }
-        lines.append("Updated: \(clockString(lastUpdated!))")
-        rebuildMenu(detailLines: lines)
+        footer.append("Updated: \(clockString(lastUpdated!))")
+
+        rebuildMenu(usageRows: rows, footerLines: footer)
     }
 
     /// Update the error display and return the delay (seconds) until the next poll.
@@ -326,6 +333,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             height: NSStatusBar.system.thickness)
     }
 
+    /// Plain text rows (used by the error / auth / "Loading..." paths). Not column-aligned.
     private func rebuildMenu(detailLines: [String], showLogin: Bool = false) {
         let menu = NSMenu()
         menu.autoenablesItems = false  // so the info lines are not shown dimmed (disabled)
@@ -341,6 +349,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             )
             menu.addItem(item)
         }
+        appendInteractiveItems(to: menu, showLogin: showLogin)
+        statusItem.menu = menu
+    }
+
+    /// Aligned usage table (3 columns) plus a de-emphasized footer (model / updated).
+    private func rebuildMenu(usageRows: [UsageRow], footerLines: [String]) {
+        let menu = NSMenu()
+        menu.autoenablesItems = false
+
+        let tableItem = NSMenuItem()
+        tableItem.isEnabled = true
+        tableItem.view = makeUsageTableView(rows: usageRows)
+        menu.addItem(tableItem)
+
+        if !footerLines.isEmpty {
+            menu.addItem(.separator())
+            for line in footerLines {
+                let item = NSMenuItem(title: line, action: nil, keyEquivalent: "")
+                item.isEnabled = true
+                item.attributedTitle = NSAttributedString(
+                    string: line,
+                    attributes: [
+                        .font: NSFont.menuFont(ofSize: 0),
+                        .foregroundColor: NSColor.secondaryLabelColor,
+                    ]
+                )
+                menu.addItem(item)
+            }
+        }
+        appendInteractiveItems(to: menu, showLogin: false)
+        statusItem.menu = menu
+    }
+
+    /// Shared tail: separator + (optional Login) + About / Refresh Now / Quit.
+    private func appendInteractiveItems(to menu: NSMenu, showLogin: Bool) {
         menu.addItem(.separator())
         if showLogin {
             let loginItem = NSMenuItem(
@@ -357,8 +400,59 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let quitItem = NSMenuItem(title: "Quit", action: #selector(quit), keyEquivalent: "q")
         quitItem.target = self
         menu.addItem(quitItem)
-        statusItem.menu = menu
     }
+}
+
+/// Build a non-interactive view hosting an aligned 3-column usage table
+/// (label | percent right-aligned | reset). Sized to its intrinsic content so the
+/// menu item adopts the table's width. A free function so the offscreen render path
+/// can build it without an AppDelegate.
+func makeUsageTableView(rows: [UsageRow]) -> NSView {
+    // Match the standard menu item insets so the table lines up with the items
+    // below the separator. `leading` ~= the menu's text gutter (checkmark + gap).
+    let leading: CGFloat = 21
+    let trailing: CGFloat = 14
+    let vPad: CGFloat = 5
+
+    let menuFont = NSFont.menuFont(ofSize: 0)
+    let digitFont = NSFont.monospacedDigitSystemFont(ofSize: menuFont.pointSize, weight: .regular)
+
+    func cell(_ s: String, font: NSFont, color: NSColor, align: NSTextAlignment = .left) -> NSTextField {
+        let t = NSTextField(labelWithString: s)
+        t.font = font
+        t.textColor = color
+        t.alignment = align
+        t.lineBreakMode = .byClipping
+        t.translatesAutoresizingMaskIntoConstraints = false
+        return t
+    }
+
+    let gridRows: [[NSView]] = rows.map { row in
+        [
+            cell(row.label, font: menuFont, color: .labelColor),
+            cell("\(row.pct)%", font: digitFont, color: .labelColor, align: .right),
+            cell("· \(row.reset)", font: menuFont, color: .secondaryLabelColor),
+        ]
+    }
+    let grid = NSGridView(views: gridRows)
+    grid.translatesAutoresizingMaskIntoConstraints = false
+    grid.rowSpacing = 3
+    grid.columnSpacing = 8
+    grid.column(at: 0).xPlacement = NSGridCell.Placement.leading
+    grid.column(at: 1).xPlacement = NSGridCell.Placement.trailing  // line up the % signs
+    grid.column(at: 2).xPlacement = NSGridCell.Placement.leading
+
+    let container = NSView()
+    container.translatesAutoresizingMaskIntoConstraints = false
+    container.addSubview(grid)
+    NSLayoutConstraint.activate([
+        grid.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: leading),
+        grid.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -trailing),
+        grid.topAnchor.constraint(equalTo: container.topAnchor, constant: vPad),
+        grid.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -vPad),
+    ])
+    container.frame = NSRect(origin: .zero, size: container.fittingSize)
+    return container
 }
 
 /// Render two stacked lines into an image sized to height (the menu-bar height).
@@ -459,6 +553,30 @@ if let idx = CommandLine.arguments.firstIndex(of: "--about") {
         if let png = rep.representation(using: .png, properties: [:]) {
             try? png.write(to: URL(fileURLWithPath: outPath))
             print("Saved: \(outPath)")
+        }
+    }
+    exit(0)
+}
+
+// --menu: render the aligned usage table offscreen to a PNG (layout/alignment check).
+if let idx = CommandLine.arguments.firstIndex(of: "--menu") {
+    let outPath = CommandLine.arguments.indices.contains(idx + 1)
+        ? CommandLine.arguments[idx + 1] : "/tmp/menu.png"
+    let rows = [
+        UsageRow(label: "5h", pct: 3, reset: "resets in 2h 13m"),
+        UsageRow(label: "Weekly", pct: 27, reset: "resets in 4d 6h"),
+        UsageRow(label: "Opus", pct: 100, reset: "resets in 4d 6h"),
+        UsageRow(label: "Sonnet", pct: 8, reset: "resets in 16h 16m"),
+    ]
+    let view = makeUsageTableView(rows: rows)
+    view.wantsLayer = true
+    view.layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
+    view.layoutSubtreeIfNeeded()
+    if let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) {
+        view.cacheDisplay(in: view.bounds, to: rep)
+        if let png = rep.representation(using: .png, properties: [:]) {
+            try? png.write(to: URL(fileURLWithPath: outPath))
+            print("Saved: \(outPath)  size=\(view.bounds.size)")
         }
     }
     exit(0)
