@@ -12,7 +12,14 @@ swift build -c release
 echo "▶ .app 번들 생성..."
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS"
+mkdir -p "$APP/Contents/Resources"
 cp ".build/release/$BIN_NAME" "$APP/Contents/MacOS/$BIN_NAME"
+
+# SwiftPM이 생성한 리소스 번들(About 헤더 PNG 등)을 복사해 Bundle.module이 찾도록 한다.
+RES_BUNDLE=".build/release/${BIN_NAME}_${BIN_NAME}.bundle"
+if [ -d "$RES_BUNDLE" ]; then
+  cp -R "$RES_BUNDLE" "$APP/Contents/Resources/"
+fi
 
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
