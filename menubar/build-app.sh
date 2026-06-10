@@ -21,6 +21,13 @@ if [ -d "$RES_BUNDLE" ]; then
   cp -R "$RES_BUNDLE" "$APP/Contents/Resources/"
 fi
 
+# App icon (gauge glyph matching the About header). Regenerate from make-icon.swift if missing.
+if [ ! -f "AppIcon.icns" ]; then
+  echo "▶ Generating AppIcon.icns..."
+  swift make-icon.swift
+fi
+cp "AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"
+
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -33,6 +40,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundleShortVersionString</key><string>0.1.0</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleExecutable</key><string>$BIN_NAME</string>
+  <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>LSMinimumSystemVersion</key><string>13.0</string>
   <key>LSUIElement</key><true/>
 </dict>
