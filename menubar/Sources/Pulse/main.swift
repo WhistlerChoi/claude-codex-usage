@@ -87,9 +87,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             do script "claude"
         end tell
         """
+        var err: NSDictionary?
         if let s = NSAppleScript(source: script) {
-            var err: NSDictionary?
             s.executeAndReturnError(&err)
+        }
+        if let err = err {
+            let detail = err[NSAppleScript.errorMessage] as? String ?? "Unknown AppleScript error."
+            let alert = NSAlert()
+            alert.alertStyle = .warning
+            alert.messageText = "Could not open Terminal"
+            alert.informativeText = """
+                Pulse needs permission to control Terminal. \
+                Allow it in System Settings > Privacy & Security > Automation, \
+                or run "claude" in a terminal yourself.
+
+                (\(detail))
+                """
+            NSApp.activate(ignoringOtherApps: true)
+            alert.runModal()
         }
     }
 
@@ -485,7 +500,7 @@ func renderStacked(
 // --render: scale up the menu-bar display image and save it as a PNG (for offscreen visual checks)
 if let idx = CommandLine.arguments.firstIndex(of: "--render") {
     let outPath = CommandLine.arguments.indices.contains(idx + 1)
-        ? CommandLine.arguments[idx + 1] : "/tmp/stacked.png"
+        ? CommandLine.arguments[idx + 1] : NSTemporaryDirectory() + "stacked.png"
     let env = ProcessInfo.processInfo.environment
     func num(_ k: String, _ d: Double) -> CGFloat {
         if let r = env[k], let v = Double(r) { return CGFloat(v) }
@@ -541,7 +556,7 @@ if CommandLine.arguments.contains("--once") {
 // --about: render the About window content offscreen and save it as a PNG (for layout visual checks)
 if let idx = CommandLine.arguments.firstIndex(of: "--about") {
     let outPath = CommandLine.arguments.indices.contains(idx + 1)
-        ? CommandLine.arguments[idx + 1] : "/tmp/about.png"
+        ? CommandLine.arguments[idx + 1] : NSTemporaryDirectory() + "about.png"
     let size = NSSize(width: 460, height: 340)
     let view = AppDelegate().makeAboutContentView(version: "0.1.0")
     view.frame = NSRect(origin: .zero, size: size)
@@ -561,7 +576,7 @@ if let idx = CommandLine.arguments.firstIndex(of: "--about") {
 // --menu: render the aligned usage table offscreen to a PNG (layout/alignment check).
 if let idx = CommandLine.arguments.firstIndex(of: "--menu") {
     let outPath = CommandLine.arguments.indices.contains(idx + 1)
-        ? CommandLine.arguments[idx + 1] : "/tmp/menu.png"
+        ? CommandLine.arguments[idx + 1] : NSTemporaryDirectory() + "menu.png"
     let rows = [
         UsageRow(label: "5h", pct: 3, reset: "resets in 2h 13m"),
         UsageRow(label: "Weekly", pct: 27, reset: "resets in 4d 6h"),

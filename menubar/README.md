@@ -37,6 +37,44 @@ swift build -c release
 
 To quit: click the menu-bar icon → `Quit` (or `pkill -f Pulse`).
 
+## Distribution (signing & notarization)
+
+> See [docs/RELEASE.md](docs/RELEASE.md) for the full pre-deployment checklist and the
+> security-review summary.
+
+`./build-app.sh` alone produces an **ad-hoc signed** app — fine for your own machine, but
+Gatekeeper blocks it on anyone else's. To distribute, sign with a Developer ID certificate
+and notarize:
+
+```bash
+# 1) Sign (hardened runtime + entitlements, done by the build script)
+CODESIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)" ./build-app.sh
+
+# 2) Notarize and staple
+ditto -c -k --keepParent Pulse.app Pulse.zip
+xcrun notarytool submit Pulse.zip --keychain-profile <profile> --wait
+xcrun stapler staple Pulse.app
+
+# 3) Verify
+spctl --assess --type execute Pulse.app
+```
+
+`Pulse.entitlements` grants `com.apple.security.automation.apple-events`, which the
+"Log In via Claude Code" menu item needs to open Terminal under the hardened runtime
+(macOS will still ask the user for Automation permission on first use).
+
+## Security & privacy
+
+- **What it reads:** the Claude Code OAuth access token (`~/.claude/.credentials.json`,
+  falling back to the `Claude Code-credentials` keychain item) and, to show the current
+  model, the local transcripts under `~/.claude/projects/**/*.jsonl` — only the
+  `message.model` field is used; conversation content is never displayed or transmitted.
+- **Where data goes:** the token is sent only to `https://api.anthropic.com` to fetch
+  usage. Nothing else leaves your machine; there is no analytics or telemetry.
+- **What it stores:** nothing. The token stays in memory and is re-read on every poll.
+- **Heads-up:** the usage endpoint (`/api/oauth/usage`) is an undocumented Claude Code
+  internal API and may change or stop working without notice.
+
 ## Settings / fine-tuning
 
 The two-line display is drawn into an image sized to the menu-bar height. If the line positions do not align with neighboring items, adjust the values below.

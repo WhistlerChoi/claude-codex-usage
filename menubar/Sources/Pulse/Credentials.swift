@@ -1,4 +1,5 @@
 import Foundation
+import Security
 
 enum CredentialsError: Error, LocalizedError {
     case notFound(String)
@@ -24,22 +25,19 @@ func extractAccessToken(_ data: Data) -> String? {
     return nil
 }
 
-/// Read the credentials string from the macOS keychain. Returns nil if absent.
+/// Read the credentials string from the macOS keychain. Returns nil if absent or denied.
 private func readFromKeychain() -> Data? {
-    let proc = Process()
-    proc.executableURL = URL(fileURLWithPath: "/usr/bin/security")
-    proc.arguments = ["find-generic-password", "-s", "Claude Code-credentials", "-w"]
-    let outPipe = Pipe()
-    proc.standardOutput = outPipe
-    proc.standardError = Pipe()
-    do {
-        try proc.run()
-    } catch {
+    let query: [String: Any] = [
+        kSecClass as String: kSecClassGenericPassword,
+        kSecAttrService as String: "Claude Code-credentials",
+        kSecMatchLimit as String: kSecMatchLimitOne,
+        kSecReturnData as String: true,
+    ]
+    var result: CFTypeRef?
+    guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess else {
         return nil
     }
-    proc.waitUntilExit()
-    guard proc.terminationStatus == 0 else { return nil }
-    return outPipe.fileHandleForReading.readDataToEndOfFile()
+    return result as? Data
 }
 
 /// Read the Claude Code OAuth accessToken.

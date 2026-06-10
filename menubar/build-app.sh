@@ -43,9 +43,31 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>LSMinimumSystemVersion</key><string>13.0</string>
   <key>LSUIElement</key><true/>
+  <key>NSAppleEventsUsageDescription</key>
+  <string>Pulse opens Terminal and runs the "claude" command so you can log in to Claude Code.</string>
+  <key>NSHumanReadableCopyright</key><string>© 2026 AGLE</string>
 </dict>
 </plist>
 PLIST
+
+# Code signing.
+# - CODESIGN_IDENTITY set (e.g. "Developer ID Application: ..."): sign with hardened
+#   runtime + entitlements — required for distribution (Gatekeeper/notarization).
+# - Unset: ad-hoc sign for local development. Ad-hoc apps do NOT pass Gatekeeper on
+#   other machines; never distribute an unsigned/ad-hoc build.
+if [ -n "${CODESIGN_IDENTITY:-}" ]; then
+  echo "▶ Signing with: $CODESIGN_IDENTITY"
+  codesign --force --options runtime --timestamp \
+    --entitlements Pulse.entitlements \
+    --sign "$CODESIGN_IDENTITY" "$APP"
+  codesign --verify --strict --verbose=2 "$APP"
+  echo "   Next (distribution): ditto -c -k --keepParent \"$APP\" Pulse.zip"
+  echo "     xcrun notarytool submit Pulse.zip --keychain-profile <profile> --wait"
+  echo "     xcrun stapler staple \"$APP\""
+else
+  echo "▶ CODESIGN_IDENTITY not set — ad-hoc signing (local dev only, not distributable)"
+  codesign --force --entitlements Pulse.entitlements --sign - "$APP"
+fi
 
 echo "✅ Done: $(pwd)/$APP"
 echo "   Run: open \"$(pwd)/$APP\"   (or double-click in Finder)"
