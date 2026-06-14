@@ -1,0 +1,24 @@
+{
+    "configurations": [
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:claude-usage}/menubar",
+            "name": "Debug Pulse (menubar)",
+            "target": "Pulse",
+            "configuration": "debug",
+            "preLaunchTask": "swift: Build Debug Pulse (menubar)"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:claude-usage}/menubar",
+            "name": "Release Pulse (menubar)",
+            "target": "Pulse",
+            "configuration": "release",
+            "preLaunchTask": "swift: Build Release Pulse (menubar)"
+        }
+    ]
+}
