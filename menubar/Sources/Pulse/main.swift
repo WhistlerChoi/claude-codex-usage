@@ -126,10 +126,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString")
-            as? String ?? "0.1.0"
+            as? String ?? "1.0.0"
 
         let win = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 460, height: 340),
+            contentRect: NSRect(x: 0, y: 0, width: 460, height: 380),
             styleMask: [.titled, .closable],
             backing: .buffered, defer: false)
         win.title = "About Pulse"
@@ -205,11 +205,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let copyright = label("© 2026 AGLE", size: 11, color: .tertiaryLabelColor)
 
-        let stack = NSStackView(views: [versionLabel, desc, meta, github, copyright])
+        // Trademark / non-affiliation notice. Pulse is an independent product; it
+        // reads Claude Code's local data but is not affiliated with Anthropic.
+        let disclaimer = label(
+            "Not affiliated with or endorsed by Anthropic.\nClaude is a trademark of Anthropic, PBC.",
+            size: 10, color: .tertiaryLabelColor)
+
+        let stack = NSStackView(views: [versionLabel, desc, meta, github, copyright, disclaimer])
         stack.orientation = .vertical
         stack.alignment = .centerX
         stack.spacing = 8
         stack.setCustomSpacing(14, after: meta)
+        stack.setCustomSpacing(12, after: copyright)
         stack.translatesAutoresizingMaskIntoConstraints = false
 
         container.addSubview(banner)

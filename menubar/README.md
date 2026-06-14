@@ -74,6 +74,8 @@ spctl --assess --type execute Pulse.app
 - **What it stores:** nothing. The token stays in memory and is re-read on every poll.
 - **Heads-up:** the usage endpoint (`/api/oauth/usage`) is an undocumented Claude Code
   internal API and may change or stop working without notice.
+- **Affiliation:** Pulse is an independent product, not affiliated with or endorsed by
+  Anthropic. Claude is a trademark of Anthropic, PBC.
 
 ## Settings / fine-tuning
 

@@ -63,6 +63,11 @@ gaps for *commercial distribution*; all code fixes have been applied.
   is a Claude Code internal/undocumented API. It may change or be blocked without notice,
   and basing a commercial product on it carries Terms-of-Service risk. Before shipping,
   confirm acceptable use and have a fallback/incident plan for when the endpoint changes.
+- **Trademark / affiliation.** Pulse uses the "Claude" name to describe what it reads.
+  A non-affiliation notice ("Not affiliated with or endorsed by Anthropic. Claude is a
+  trademark of Anthropic, PBC.") now ships in the About window and `README.md`. Keep the
+  product's own branding ("Pulse") primary in all store/marketing copy; use "Claude" only
+  nominatively (to describe compatibility), never in a way that implies endorsement.
 
 ## What the app accesses (for privacy disclosures)
 
