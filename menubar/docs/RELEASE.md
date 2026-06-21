@@ -3,6 +3,28 @@
 Pre-deployment checklist and the security-review summary for the macOS menu-bar app
 (`menubar/`). Scope is the `menubar/` directory only.
 
+## One-command release
+
+Once the one-time setup is done (Developer ID cert + saved notarytool profile), the whole
+build → sign → notarize → staple → DMG flow is a single command:
+
+```bash
+CODESIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)" ./release.sh
+# → Pulse-<version>.dmg (notarized + stapled, ready to distribute)
+```
+
+One-time prerequisites:
+
+```bash
+# 1) Developer ID Application certificate: Xcode → Settings → Accounts → Manage Certificates → +
+# 2) Saved notarization profile (app-specific password from appleid.apple.com):
+xcrun notarytool store-credentials pulse \
+  --apple-id "you@appleid.com" --team-id "TEAMID" --password "xxxx-xxxx-xxxx-xxxx"
+```
+
+The manual steps below are what `release.sh` runs under the hood, kept for reference and
+troubleshooting.
+
 ## Pre-deployment checklist
 
 - [ ] **Sign with a Developer ID certificate.** An ad-hoc build (plain `./build-app.sh`)

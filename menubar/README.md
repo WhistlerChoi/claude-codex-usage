@@ -44,13 +44,20 @@ To quit: click the menu-bar icon → `Quit` (or `pkill -f Pulse`).
 
 `./build-app.sh` alone produces an **ad-hoc signed** app — fine for your own machine, but
 Gatekeeper blocks it on anyone else's. To distribute, sign with a Developer ID certificate
-and notarize:
+and notarize. Once set up, `release.sh` does the whole thing in one command:
 
 ```bash
-# 1) Sign (hardened runtime + entitlements, done by the build script)
+CODESIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)" ./release.sh
+# → Pulse-<version>.dmg, notarized + stapled, ready to hand out
+```
+
+Under the hood that runs:
+
+```bash
+# 1) Sign (hardened runtime + entitlements, done by build-app.sh)
 CODESIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)" ./build-app.sh
 
-# 2) Notarize and staple
+# 2) Notarize and staple the app
 ditto -c -k --keepParent Pulse.app Pulse.zip
 xcrun notarytool submit Pulse.zip --keychain-profile <profile> --wait
 xcrun stapler staple Pulse.app
