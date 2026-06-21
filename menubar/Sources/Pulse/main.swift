@@ -51,7 +51,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Task.detached { [weak self] in
             guard let self else { return }
             do {
-                let usage = try await fetchUsage()
+                let usage = try await fetchUsageAutoRefreshing()
                 let model = readCurrentModel()
                 await MainActor.run {
                     self.inFlight = false
@@ -540,12 +540,64 @@ if let idx = CommandLine.arguments.firstIndex(of: "--render") {
     exit(0)
 }
 
+// --selftest: exercise the pure refresh/merge helpers (no network, no keychain), then exit.
+if CommandLine.arguments.contains("--selftest") {
+    var failures = 0
+    func check(_ cond: Bool, _ label: String) {
+        print((cond ? "PASS" : "FAIL") + ": " + label)
+        if !cond { failures += 1 }
+    }
+
+    // parseRefreshResponse: rotated refresh token + computed expiry.
+    let resp = #"{"access_token":"newA","refresh_token":"newR","expires_in":28800}"#.data(using: .utf8)!
+    if let t = try? parseRefreshResponse(resp, previousRefreshToken: "oldR", nowMs: 1_000_000) {
+        check(t.accessToken == "newA", "parseRefreshResponse access token")
+        check(t.refreshToken == "newR", "parseRefreshResponse rotated refresh token")
+        check(t.expiresAtMs == 1_000_000 + 28_800 * 1000, "parseRefreshResponse expiry = now + expires_in*1000")
+    } else {
+        check(false, "parseRefreshResponse parsed")
+    }
+
+    // parseRefreshResponse: missing refresh_token carries the previous one forward.
+    let respNoRefresh = #"{"access_token":"a2","expires_in":3600}"#.data(using: .utf8)!
+    if let t = try? parseRefreshResponse(respNoRefresh, previousRefreshToken: "keepR", nowMs: 0) {
+        check(t.refreshToken == "keepR", "parseRefreshResponse falls back to previous refresh token")
+    } else {
+        check(false, "parseRefreshResponse (no refresh_token) parsed")
+    }
+
+    // mergedCredentialsData: preserves unrelated fields + wrapper shape, updates the three token fields.
+    let existing = #"{"claudeAiOauth":{"accessToken":"old","refreshToken":"oldR","expiresAt":1,"scopes":["x"],"subscriptionType":"pro"}}"#.data(using: .utf8)!
+    if let merged = try? mergedCredentialsData(existing: existing, accessToken: "A", refreshToken: "R", expiresAtMs: 1782033795750),
+       let obj = (try? JSONSerialization.jsonObject(with: merged)) as? [String: Any],
+       let oauth = obj["claudeAiOauth"] as? [String: Any] {
+        check(oauth["accessToken"] as? String == "A", "merge updates accessToken")
+        check(oauth["refreshToken"] as? String == "R", "merge updates refreshToken")
+        check((oauth["expiresAt"] as? NSNumber)?.int64Value == 1782033795750, "merge writes integer expiresAt")
+        check(oauth["scopes"] != nil, "merge preserves scopes")
+        check(oauth["subscriptionType"] as? String == "pro", "merge preserves subscriptionType")
+    } else {
+        check(false, "mergedCredentialsData (wrapper) produced valid JSON")
+    }
+
+    // mergedCredentialsData: empty input defaults to Claude Code's wrapper shape.
+    if let merged = try? mergedCredentialsData(existing: nil, accessToken: "A", refreshToken: "R", expiresAtMs: 2),
+       let obj = (try? JSONSerialization.jsonObject(with: merged)) as? [String: Any] {
+        check(obj["claudeAiOauth"] is [String: Any], "merge with no existing data uses wrapper shape")
+    } else {
+        check(false, "mergedCredentialsData (empty) produced valid JSON")
+    }
+
+    print(failures == 0 ? "ALL PASS" : "\(failures) FAILURE(S)")
+    exit(failures == 0 ? 0 : 1)
+}
+
 // --once: print the current values once without the menu bar, then exit (for verification/debugging)
 if CommandLine.arguments.contains("--once") {
     let sema = DispatchSemaphore(value: 0)
     Task {
         do {
-            let usage = try await fetchUsage()
+            let usage = try await fetchUsageAutoRefreshing()
             let model = readCurrentModel()
             print("[gauge] " + menuBarText(usage))
             print("  5h:     \(pct(usage.fiveHour.utilization))% · \(formatResetIn(usage.fiveHour.resetsAt))")

@@ -63,8 +63,7 @@ func parseUsage(_ json: Any) throws -> UsageData {
     )
 }
 
-func fetchUsage() async throws -> UsageData {
-    let token = try readAccessToken()
+func fetchUsage(token: String) async throws -> UsageData {
     var req = URLRequest(url: URL(string: "https://api.anthropic.com/api/oauth/usage")!)
     req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
     req.setValue("oauth-2025-04-20", forHTTPHeaderField: "anthropic-beta")
@@ -86,4 +85,49 @@ func fetchUsage() async throws -> UsageData {
     }
     let json = try JSONSerialization.jsonObject(with: data)
     return try parseUsage(json)
+}
+
+/// Fetch usage, transparently refreshing the OAuth token when it is expired or rejected.
+/// This is what lets Pulse recover after a boot without a manual `claude` login: the access
+/// token (~8h life) is refreshed from the stored refresh token, exactly as Claude Code does.
+func fetchUsageAutoRefreshing() async throws -> UsageData {
+    var creds = try readCredentials()
+
+    // Proactive: if the stored token is at/near expiry and we have a refresh token, refresh first.
+    if let exp = creds.expiresAtMs, let rt = creds.refreshToken {
+        let nowMs = Date().timeIntervalSince1970 * 1000
+        if nowMs >= exp - 300_000 {  // within 5 minutes of expiry
+            if let refreshed = try? await performRefresh(rt, source: creds.source) {
+                creds = refreshed
+            }
+        }
+    }
+
+    do {
+        return try await fetchUsage(token: creds.accessToken)
+    } catch UsageError.auth {
+        // Reactive: token rejected (e.g. Claude Code rotated it, or clock skew). Refresh once, retry.
+        guard let rt = creds.refreshToken,
+              let refreshed = try? await performRefresh(rt, source: creds.source) else {
+            throw UsageError.auth
+        }
+        return try await fetchUsage(token: refreshed.accessToken)
+    }
+}
+
+/// Refresh the access token and persist it back to its source. Writeback failure is logged but
+/// non-fatal so the current poll still succeeds with the freshly minted token.
+private func performRefresh(_ refreshToken: String, source: CredentialSource) async throws -> Credentials {
+    let t = try await refreshAccessToken(refreshToken)
+    do {
+        try writeCredentials(
+            accessToken: t.accessToken, refreshToken: t.refreshToken,
+            expiresAtMs: t.expiresAtMs, to: source)
+    } catch {
+        FileHandle.standardError.write(
+            Data("Pulse: token refreshed but writeback failed: \(error.localizedDescription)\n".utf8))
+    }
+    return Credentials(
+        accessToken: t.accessToken, refreshToken: t.refreshToken,
+        expiresAtMs: t.expiresAtMs, source: source)
 }
