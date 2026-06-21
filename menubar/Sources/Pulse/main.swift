@@ -108,10 +108,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    private static let repoURL = "https://github.com/WhistlerChoi/claude-usage"
+    private static let companyURL = "https://agle.xyz"
 
-    @objc func openGitHub() {
-        if let url = URL(string: AppDelegate.repoURL) {
+    @objc func openCompanySite() {
+        if let url = URL(string: AppDelegate.companyURL) {
             NSWorkspace.shared.open(url)
         }
     }
@@ -191,19 +191,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             "Data: ~/.claude · /usage API   ·   Poll interval: \(Int(interval))s",
             size: 11, color: .secondaryLabelColor)
 
-        // GitHub link button
-        let github = NSButton(title: "GitHub", target: self, action: #selector(openGitHub))
-        github.bezelStyle = .inline
-        github.isBordered = false
-        github.contentTintColor = .linkColor
-        github.attributedTitle = NSAttributedString(
-            string: "GitHub",
+        // Copyright doubles as the company link → https://agle.xyz
+        let copyright = NSButton(title: "© 2026 AGLE", target: self, action: #selector(openCompanySite))
+        copyright.bezelStyle = .inline
+        copyright.isBordered = false
+        copyright.contentTintColor = .linkColor
+        copyright.attributedTitle = NSAttributedString(
+            string: "© 2026 AGLE",
             attributes: [
                 .foregroundColor: NSColor.linkColor,
-                .font: NSFont.systemFont(ofSize: 12),
+                .font: NSFont.systemFont(ofSize: 11),
             ])
-
-        let copyright = label("© 2026 AGLE", size: 11, color: .tertiaryLabelColor)
 
         // Trademark / non-affiliation notice. Pulse is an independent product; it
         // reads Claude Code's local data but is not affiliated with Anthropic.
@@ -211,7 +209,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             "Not affiliated with or endorsed by Anthropic.\nClaude is a trademark of Anthropic, PBC.",
             size: 10, color: .tertiaryLabelColor)
 
-        let stack = NSStackView(views: [versionLabel, desc, meta, github, copyright, disclaimer])
+        let stack = NSStackView(views: [versionLabel, desc, meta, copyright, disclaimer])
         stack.orientation = .vertical
         stack.alignment = .centerX
         stack.spacing = 8
