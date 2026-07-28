@@ -61,4 +61,4 @@ npx @vscode/vsce package   # build .vsix
 
 Debugging: open this folder in VSCode and press `F5` (Extension Development Host).
 
-Install: `code --install-extension pulse-0.3.0.vsix`
+Install: `code --install-extension pulse-0.3.1.vsix`

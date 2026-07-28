@@ -7,6 +7,7 @@ import (
 	"image/color"
 	"image/png"
 	"runtime"
+	"unicode/utf8"
 
 	"golang.org/x/image/draw"
 	"golang.org/x/image/font"
@@ -78,8 +79,10 @@ func renderIconPNG(text, bgHex string) []byte {
 		}
 	}
 
-	// draw the digits with a small bitmap font, then scale up and center them
-	tw := 7 * len(text)
+	// draw the digits with a small bitmap font, then scale up and center them.
+	// Count runes, not bytes: non-ASCII text like "··" is multi-byte and would otherwise reserve
+	// twice the width it needs, shrinking the glyphs and pushing them off-center.
+	tw := 7 * utf8.RuneCountInString(text)
 	th := 13
 	tmp := image.NewRGBA(image.Rect(0, 0, tw, th))
 	d := &font.Drawer{

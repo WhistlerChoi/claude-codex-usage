@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { pct, statusBarText, formatResetIn, peakUtilization, tooltipMarkdown, nextRetryDelayMs, shouldShowStale } from "./format";
+import { pct, statusBarText, formatResetIn, peakUtilization, tooltipMarkdown, nextRetryDelayMs, shouldShowStale, formatRetryIn } from "./format";
 import { parseUsage, parseRetryAfterMs, type UsageData } from "./usageClient";
 
 // utilization is a percent (0-100)
@@ -113,4 +113,14 @@ test("parseRetryAfterMs: missing/non-integer is undefined", () => {
   assert.equal(parseRetryAfterMs(null), undefined);
   assert.equal(parseRetryAfterMs("Wed, 21 Oct 2025 07:28:00 GMT"), undefined);
   assert.equal(parseRetryAfterMs("abc"), undefined);
+});
+
+test("formatRetryIn: seconds, minutes, hours", () => {
+  assert.equal(formatRetryIn(0), "Retrying in 0s");
+  assert.equal(formatRetryIn(45_000), "Retrying in 45s");
+  assert.equal(formatRetryIn(-5_000), "Retrying in 0s");
+  assert.equal(formatRetryIn(60_000), "Retrying in 1m");
+  assert.equal(formatRetryIn(3_599_000), "Retrying in 59m"); // never "60m"
+  assert.equal(formatRetryIn(3_600_000), "Retrying in 1h");
+  assert.equal(formatRetryIn(3_900_000), "Retrying in 1h 5m");
 });

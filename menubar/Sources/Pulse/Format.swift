@@ -74,6 +74,18 @@ func nextRetryDelay(
     return base + base * 0.2 * rand()
 }
 
+/// Menu line telling the user when the next automatic retry happens, e.g. "Retrying in 45s",
+/// "Retrying in 2m", "Retrying in 1h 5m". Shown for transient failures (network, HTTP 429) so a
+/// throttle is never mistaken for a login problem.
+func formatRetryIn(_ seconds: TimeInterval) -> String {
+    let total = max(0, Int(seconds))
+    if total < 60 { return "Retrying in \(total)s" }
+    if total < 3600 { return "Retrying in \(total / 60)m" }
+    let hours = total / 3600
+    let mins = (total % 3600) / 60
+    return mins > 0 ? "Retrying in \(hours)h \(mins)m" : "Retrying in \(hours)h"
+}
+
 /// Stale if age since the last success is at least interval*3.
 func shouldShowStale(_ age: TimeInterval, _ interval: TimeInterval) -> Bool {
     return age >= interval * 3

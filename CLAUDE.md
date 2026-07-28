@@ -16,10 +16,34 @@ Three front-ends that display Claude Code's **5-hour / weekly usage** (and curre
 
 ## Shared architecture (same 4 modules in every implementation)
 
-1. **credentials** — read the OAuth `accessToken`. Order: `~/.claude/.credentials.json` first (JSON path `claudeAiOauth.accessToken`, fallback `accessToken`); on macOS only, if the file is absent, fall back to keychain item `Claude Code-credentials` (`security find-generic-password -s ... -w`). Re-read every poll so Claude Code's token refresh is picked up automatically.
+1. **credentials** — read the OAuth `accessToken` from `~/.claude/.credentials.json` (JSON path `claudeAiOauth.accessToken`, fallback `accessToken`) **and**, on macOS, keychain item `Claude Code-credentials`. **Freshest wins** — see below. Re-read every poll so Claude Code's token refresh is picked up automatically.
 2. **usageClient** — `GET https://api.anthropic.com/api/oauth/usage` with headers `Authorization: Bearer <token>` and `anthropic-beta: oauth-2025-04-20`. Response: `five_hour`, `seven_day`, `seven_day_opus`, `seven_day_sonnet`, each `{ utilization, resets_at }`. 401/403 → auth error (distinct from network errors).
 3. **model** — best-effort current model. Scan `~/.claude/projects/**/*.jsonl`, pick the most recently modified transcript, read the **last** line's `message.model`. `friendlyModelName` maps e.g. `claude-opus-4-8` → `Opus 4.8`. Failure is non-fatal (model is optional in the UI).
 4. **format** — pure functions (status text, tooltip, relative reset time). The unit tests live here and in `model`.
+
+### CRITICAL: credential store selection is "freshest wins", never file-first
+
+Claude Code on macOS stores its OAuth credentials in the **keychain** and can leave a long-dead
+`~/.claude/.credentials.json` behind from an older version. Preferring the file unconditionally
+means every poll presents an expired token; the API then answers **HTTP 429** (throttled) rather
+than a clean 401, the UI shows a "login required" state, and logging in cannot help because
+Claude Code writes the keychain while the app keeps reading the file. That loop is unbreakable
+from the user's side — do not reintroduce it.
+
+So all three ports read **every** store that has credentials and use the one with the later
+`expiresAt` (`pickFreshest` / `pickFreshestToken`, pure and unit-tested in each port):
+
+- Candidates are passed **file first, keychain last**, and ties go to the **last** candidate. The
+  tie-break matters for writeback: a refreshed (rotated) token must land where Claude Code reads
+  it, or Claude Code's own stored refresh token gets revoked out from under it.
+- An unparseable or tokenless store is skipped, never fatal.
+- Consequence on macOS: the keychain is read every poll, so each app asks for keychain permission
+  once (the user clicks *Always Allow*). That prompt is expected, not a bug.
+
+Only `menubar/` refreshes tokens itself (`TokenRefresh.swift`). Two rules there: never send a token
+already past `expiresAt` (report instead — a doomed request is what earns the 429), and keep every
+refreshed token in the in-memory cache even when writeback fails, so the next poll cannot reuse an
+already-rotated (revoked) refresh token.
 
 ### CRITICAL: `utilization` is 0–100, not 0–1
 
@@ -31,9 +55,9 @@ If you "fix" this by treating it as a fraction, the status bar will show `0%` / 
 
 ### Error handling contract (all implementations)
 
-- Auth/credentials error → show a "login required" state.
-- Network/transient error **with** a previous value → keep showing the last value, mark it stale (⚠).
-- Network error with no prior value → show error.
+- Auth/credentials error → show a "login required" state (and, in `menubar/`, the "Log In via Claude Code" item). **Only** auth/credentials errors may say this.
+- Network/transient error **with** a previous value → keep showing the last value, mark it stale (⚠) once `shouldShowStale`.
+- Network/transient error (incl. HTTP 429) with **no** prior value → neutral `··` placeholder in gray, the error text, and `formatRetryIn(delay)`; **no** login prompt. Telling the user to log in cannot fix a rate limit and sends them in circles.
 
 ## Build & test
 

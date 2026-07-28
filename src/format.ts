@@ -116,6 +116,20 @@ export function nextRetryDelayMs(
   return Math.round(base + base * 0.2 * rand());
 }
 
+/**
+ * Line telling the user when the next automatic retry happens, e.g. "Retrying in 45s",
+ * "Retrying in 2m", "Retrying in 1h 5m". Shown for transient failures (network, HTTP 429) so a
+ * throttle is never mistaken for a login problem.
+ */
+export function formatRetryIn(ms: number): string {
+  const total = Math.max(0, Math.floor(ms / 1000));
+  if (total < 60) return `Retrying in ${total}s`;
+  if (total < 3600) return `Retrying in ${Math.floor(total / 60)}m`;
+  const hours = Math.floor(total / 3600);
+  const mins = Math.floor((total % 3600) / 60);
+  return mins > 0 ? `Retrying in ${hours}h ${mins}m` : `Retrying in ${hours}h`;
+}
+
 /** Mark as stale if ageMs since the last success is at least interval*3. */
 export function shouldShowStale(ageMs: number, intervalMs: number): boolean {
   return ageMs >= intervalMs * 3;

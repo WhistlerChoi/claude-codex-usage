@@ -87,19 +87,65 @@ func fetchUsage(token: String) async throws -> UsageData {
     return try parseUsage(json)
 }
 
+/// Process-lifetime cache of the most recently refreshed credentials.
+///
+/// Writeback can fail (e.g. the keychain ACL denies writes to Claude Code's item). Without this
+/// cache the freshly minted token would be dropped on the floor and the next poll would re-refresh
+/// using an already-rotated — hence revoked — refresh token: a permanent auth failure that also
+/// keeps hammering the endpoint. Holding the rotation in memory keeps the process working.
+private final class RefreshedCredentialsCache {
+    static let shared = RefreshedCredentialsCache()
+    private let lock = NSLock()
+    private var cached: Credentials?
+
+    func store(_ c: Credentials) {
+        lock.lock()
+        cached = c
+        lock.unlock()
+    }
+
+    /// The cached credentials if they are newer than `other`, otherwise nil.
+    func fresherThan(_ other: Credentials) -> Credentials? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let cached = cached else { return nil }
+        return (cached.expiresAtMs ?? 0) > (other.expiresAtMs ?? 0) ? cached : nil
+    }
+}
+
+/// Map a token-refresh failure onto the usage error the UI should show. A throttled refresh is
+/// transient (back off and retry); anything else means we genuinely cannot authenticate.
+private func usageError(forFailedRefresh error: Error) -> UsageError {
+    if case RefreshError.http(let code) = error, code == 429 {
+        return .rateLimited(retryAfter: nil)
+    }
+    return .auth
+}
+
 /// Fetch usage, transparently refreshing the OAuth token when it is expired or rejected.
 /// This is what lets Pulse recover after a boot without a manual `claude` login: the access
 /// token (~8h life) is refreshed from the stored refresh token, exactly as Claude Code does.
 func fetchUsageAutoRefreshing() async throws -> UsageData {
     var creds = try readCredentials()
+    // A refresh whose writeback failed lives only in memory; prefer it over the stores' older copy.
+    if let cached = RefreshedCredentialsCache.shared.fresherThan(creds) {
+        creds = cached
+    }
 
-    // Proactive: if the stored token is at/near expiry and we have a refresh token, refresh first.
-    if let exp = creds.expiresAtMs, let rt = creds.refreshToken {
-        let nowMs = Date().timeIntervalSince1970 * 1000
-        if nowMs >= exp - 300_000 {  // within 5 minutes of expiry
-            if let refreshed = try? await performRefresh(rt, source: creds.source) {
-                creds = refreshed
+    // Proactive: if the stored token is at/near expiry, refresh before spending a request on it.
+    let nowMs = Date().timeIntervalSince1970 * 1000
+    if let exp = creds.expiresAtMs, nowMs >= exp - 300_000 {  // within 5 minutes of expiry
+        if let rt = creds.refreshToken {
+            do {
+                creds = try await performRefresh(rt, source: creds.source)
+            } catch {
+                // Already past expiry: the token cannot work, and repeated dead-token requests are
+                // what make the endpoint answer 429 instead of 401. Report instead of trying.
+                if nowMs >= exp { throw usageError(forFailedRefresh: error) }
+                // Still inside the pre-expiry window — the current token is valid, carry on.
             }
+        } else if nowMs >= exp {
+            throw UsageError.auth  // expired with no refresh token: only a login can fix this
         }
     }
 
@@ -107,9 +153,12 @@ func fetchUsageAutoRefreshing() async throws -> UsageData {
         return try await fetchUsage(token: creds.accessToken)
     } catch UsageError.auth {
         // Reactive: token rejected (e.g. Claude Code rotated it, or clock skew). Refresh once, retry.
-        guard let rt = creds.refreshToken,
-              let refreshed = try? await performRefresh(rt, source: creds.source) else {
-            throw UsageError.auth
+        guard let rt = creds.refreshToken else { throw UsageError.auth }
+        let refreshed: Credentials
+        do {
+            refreshed = try await performRefresh(rt, source: creds.source)
+        } catch {
+            throw usageError(forFailedRefresh: error)
         }
         return try await fetchUsage(token: refreshed.accessToken)
     }
@@ -127,7 +176,10 @@ private func performRefresh(_ refreshToken: String, source: CredentialSource) as
         FileHandle.standardError.write(
             Data("Pulse: token refreshed but writeback failed: \(error.localizedDescription)\n".utf8))
     }
-    return Credentials(
+    let refreshed = Credentials(
         accessToken: t.accessToken, refreshToken: t.refreshToken,
         expiresAtMs: t.expiresAtMs, source: source)
+    // Keep the rotation even if writeback failed, so the next poll does not reuse a revoked token.
+    RefreshedCredentialsCache.shared.store(refreshed)
+    return refreshed
 }

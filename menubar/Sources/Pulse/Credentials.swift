@@ -49,7 +49,7 @@ private func oauthDict(_ obj: [String: Any]) -> [String: Any]? {
 }
 
 /// Parse the full credential set (token + refresh token + expiry) from a JSON blob.
-private func parseCredentials(_ data: Data, source: CredentialSource) -> Credentials? {
+func parseCredentials(_ data: Data, source: CredentialSource) -> Credentials? {
     guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
           let oauth = oauthDict(obj),
           let tok = oauth["accessToken"] as? String, !tok.isEmpty else {
@@ -79,14 +79,43 @@ private func credentialsFileURL() -> URL {
     FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".claude/.credentials.json")
 }
 
+/// Pick the live credentials out of every store that has some ("freshest wins").
+///
+/// Both stores are consulted because Claude Code moved to the keychain on macOS and can leave a
+/// long-dead ~/.claude/.credentials.json behind: preferring the file unconditionally means every
+/// poll presents an expired token, which the API eventually throttles (HTTP 429) instead of
+/// rejecting cleanly. Candidates are ranked by `expiresAt`, and ties go to the LAST candidate —
+/// callers pass the keychain last, so a refreshed token is written back to where Claude Code
+/// reads it. (Writing a rotated refresh token to the file while Claude Code reads the keychain
+/// would revoke Claude Code's own credentials.)
+/// Pure (no I/O) so it is testable.
+func pickFreshest(_ candidates: [(Data, CredentialSource)]) -> Credentials? {
+    var best: Credentials?
+    var bestRank = -Double.greatestFiniteMagnitude
+    for (data, source) in candidates {
+        guard let c = parseCredentials(data, source: source) else { continue }
+        let rank = c.expiresAtMs ?? 0
+        if best == nil || rank >= bestRank {
+            best = c
+            bestRank = rank
+        }
+    }
+    return best
+}
+
 /// Read the Claude Code OAuth credentials (token, refresh token, expiry) and record their source.
-/// Prefers ~/.claude/.credentials.json; falls back to the macOS keychain.
+/// Reads ~/.claude/.credentials.json and (on macOS) the keychain, then uses whichever is fresher.
 func readCredentials() throws -> Credentials {
     let credPath = credentialsFileURL()
-    if let data = try? Data(contentsOf: credPath), let c = parseCredentials(data, source: .file(credPath)) {
-        return c
+    var candidates: [(Data, CredentialSource)] = []
+    if let data = try? Data(contentsOf: credPath) {
+        candidates.append((data, .file(credPath)))
     }
-    if let data = readFromKeychain(), let c = parseCredentials(data, source: .keychain) {
+    // Keychain last: it wins ties, so writeback lands where Claude Code reads.
+    if let data = readFromKeychain() {
+        candidates.append((data, .keychain))
+    }
+    if let c = pickFreshest(candidates) {
         return c
     }
     throw CredentialsError.notFound("Could not read credentials. Log in with Claude Code.")
