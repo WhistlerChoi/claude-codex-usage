@@ -38,6 +38,26 @@ func TestNextRetryDelay(t *testing.T) {
 	}
 }
 
+func TestFormatRetryIn(t *testing.T) {
+	cases := []struct {
+		d    time.Duration
+		want string
+	}{
+		{0, "Retrying in 0s"},
+		{45 * time.Second, "Retrying in 45s"},
+		{-5 * time.Second, "Retrying in 0s"},
+		{60 * time.Second, "Retrying in 1m"},
+		{3599 * time.Second, "Retrying in 59m"}, // never "60m"
+		{3600 * time.Second, "Retrying in 1h"},
+		{3900 * time.Second, "Retrying in 1h 5m"},
+	}
+	for _, c := range cases {
+		if got := formatRetryIn(c.d); got != c.want {
+			t.Errorf("formatRetryIn(%v)=%q want %q", c.d, got, c.want)
+		}
+	}
+}
+
 func TestShouldShowStale(t *testing.T) {
 	interval := 300 * time.Second
 	if shouldShowStale(899*time.Second, interval) {

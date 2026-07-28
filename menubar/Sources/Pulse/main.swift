@@ -128,7 +128,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString")
-            as? String ?? "1.0.0"
+            as? String ?? "1.0.3"
 
         let win = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 460, height: 380),
@@ -299,8 +299,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             consecutiveFailures = 0
             return interval
         }
-        // Transient error: retry with backoff
+        // Transient error: retry with backoff. Compute the delay first so it can be displayed.
         consecutiveFailures += 1
+        let delay = nextRetryDelay(consecutiveFailures, interval, retryAfter(from: error))
         let age = lastSuccessAt.map { Date().timeIntervalSince($0) } ?? .greatestFiniteMagnitude
         if let usage = lastUsage, !shouldShowStale(age, interval) {
             _ = usage  // still fresh -> no display change (no-op)
@@ -315,10 +316,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 error.localizedDescription,
             ])
         } else {
-            setStacked(top: "Login", bottom: "needed", color: .systemRed)
-            rebuildMenu(detailLines: [error.localizedDescription], showLogin: true)
+            // No value to fall back on. This is a transient failure (network, HTTP 429), NOT an
+            // auth problem: show a neutral placeholder and no Login item, so the user is not sent
+            // on a pointless login round trip that cannot fix a rate limit.
+            setStacked(top: "··", bottom: "··", color: .systemGray)
+            rebuildMenu(detailLines: [error.localizedDescription, formatRetryIn(delay)])
         }
-        return nextRetryDelay(consecutiveFailures, interval, retryAfter(from: error))
+        return delay
     }
 
     private func isAuthError(_ error: Error) -> Bool {
@@ -628,6 +632,52 @@ if CommandLine.arguments.contains("--selftest") {
     let c5 = s5.cache(env: "tok-env")
     check((try? c5.getToken()) == "tok-env", "env token wins")
     check(s5.fpReads == 0 && s5.secretReads == 0, "env token: source untouched")
+
+    // pickFreshestToken: the store holding the newer token wins, whichever store that is.
+    func blob(_ token: String, _ expiresAt: Int?) -> Data {
+        var oauth: [String: Any] = ["accessToken": token, "refreshToken": "r"]
+        if let e = expiresAt { oauth["expiresAt"] = e }
+        return (try? JSONSerialization.data(withJSONObject: ["claudeAiOauth": oauth])) ?? Data()
+    }
+
+    check(extractCredentials(blob("wrapped", 1_234))?.token == "wrapped", "extractCredentials: wrapper shape")
+    check(extractCredentials(blob("wrapped", 1_234))?.expiresAt == 1_234, "extractCredentials: expiry")
+    check(extractCredentials(Data("not json".utf8)) == nil, "extractCredentials: unparseable -> nil")
+    check(extractCredentials(blob("", nil)) == nil, "extractCredentials: empty token -> nil")
+
+    // The reported bug: a months-old credentials file next to a keychain item refreshed today.
+    check(pickFreshestToken([blob("dead", 1_000), blob("live", 9_000)]) == "live",
+          "pickFreshestToken: fresh keychain beats stale file")
+    // The mirror case must not regress.
+    check(pickFreshestToken([blob("live", 9_000), blob("dead", 1_000)]) == "live",
+          "pickFreshestToken: fresh file beats stale keychain")
+    check(pickFreshestToken([blob("only", 5_000)]) == "only", "pickFreshestToken: single candidate")
+    check(pickFreshestToken([blob("good", 5_000), Data("not json".utf8)]) == "good",
+          "pickFreshestToken: unparseable candidate is skipped")
+    // Ties go to the last candidate (callers pass the keychain last).
+    check(pickFreshestToken([blob("file", 7_000), blob("keychain", 7_000)]) == "keychain",
+          "pickFreshestToken: equal expiry goes to the keychain")
+    check(pickFreshestToken([blob("file", nil), blob("keychain", nil)]) == "keychain",
+          "pickFreshestToken: no expiry anywhere goes to the keychain")
+    check(pickFreshestToken([]) == nil, "pickFreshestToken: no candidates -> nil")
+
+    // combineFingerprints: a rotation in either store must register, or the cache never re-reads.
+    check(combineFingerprints(["file:100", "keychain:1"]) != combineFingerprints(["file:100", "keychain:2"]),
+          "combineFingerprints: keychain rotation changes the fingerprint")
+    check(combineFingerprints(["file:100", "keychain:1"]) == "file:100|keychain:1",
+          "combineFingerprints: both stores")
+    check(combineFingerprints([nil, "keychain:1"]) == "keychain:1", "combineFingerprints: keychain only")
+    check(combineFingerprints(["file:100", nil]) == "file:100", "combineFingerprints: file only")
+    check(combineFingerprints([nil, nil]) == nil, "combineFingerprints: nothing present -> nil")
+
+    // formatRetryIn: the transient-error menu line.
+    check(formatRetryIn(0) == "Retrying in 0s", "formatRetryIn 0s")
+    check(formatRetryIn(45) == "Retrying in 45s", "formatRetryIn 45s")
+    check(formatRetryIn(-5) == "Retrying in 0s", "formatRetryIn clamps negatives")
+    check(formatRetryIn(60) == "Retrying in 1m", "formatRetryIn 1m")
+    check(formatRetryIn(3599) == "Retrying in 59m", "formatRetryIn 59m (no 60m)")
+    check(formatRetryIn(3600) == "Retrying in 1h", "formatRetryIn 1h")
+    check(formatRetryIn(3900) == "Retrying in 1h 5m", "formatRetryIn 1h 5m")
 
     print(failures == 0 ? "ALL PASS" : "\(failures) FAILURE(S)")
     exit(failures == 0 ? 0 : 1)

@@ -111,8 +111,9 @@ func refresh(interval time.Duration, force bool) time.Duration {
 			consecutiveFailures = 0
 			return interval
 		}
-		// transient error: retry with backoff
+		// transient error: retry with backoff. Compute the delay first so it can be displayed.
 		consecutiveFailures++
+		delay := nextRetryDelay(consecutiveFailures, interval, retryAfterFrom(err), rand.Float64())
 		age := time.Duration(1 << 62) // effectively infinite if lastSuccessAt is unset
 		if !lastSuccessAt.IsZero() {
 			age = time.Since(lastSuccessAt)
@@ -122,9 +123,9 @@ func refresh(interval time.Duration, force bool) time.Duration {
 		} else if lastUsage != nil {
 			applyUsage(lastUsage, lastModel, true)
 		} else {
-			applyError(err.Error())
+			applyTransient(err.Error(), delay)
 		}
-		return nextRetryDelay(consecutiveFailures, interval, retryAfterFrom(err), rand.Float64())
+		return delay
 	}
 	model, _ := readCurrentModel()
 	lastUsage, lastModel = usage, model
@@ -190,6 +191,26 @@ func applyError(message string) {
 	for i, it := range detailItems {
 		if i == 0 {
 			it.SetTitle(message)
+			it.Show()
+		} else {
+			it.Hide()
+		}
+	}
+}
+
+// applyTransient: transient failure (network, HTTP 429) with no previous value to show. Uses a
+// neutral placeholder rather than the "!" of a real error, and names the retry time, so a throttle
+// is never presented as something the user has to fix by logging in.
+func applyTransient(message string, retryIn time.Duration) {
+	// ".." not "··": the icon is drawn with basicfont.Face7x13, which has no MIDDLE DOT glyph and
+	// would render tofu boxes. The menu text below is identical to the other ports.
+	systray.SetIcon(iconBytes("..", colorError))
+	retry := formatRetryIn(retryIn)
+	systray.SetTooltip("Pulse\n⚠ " + message + "\n" + retry)
+	lines := []string{message, retry}
+	for i, it := range detailItems {
+		if i < len(lines) {
+			it.SetTitle(lines[i])
 			it.Show()
 		} else {
 			it.Hide()

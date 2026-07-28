@@ -69,7 +69,7 @@ Pulse is an independent open-source project, **not affiliated with or endorsed b
 npm install
 npm run package            # bundle → dist/extension.js
 npx @vscode/vsce package   # → pulse-<version>.vsix
-code --install-extension pulse-0.3.0.vsix
+code --install-extension pulse-0.3.2.vsix
 ```
 
 For development: open this folder in VSCode and press `F5` (Extension Development Host), or `npm run watch` to rebuild on change.

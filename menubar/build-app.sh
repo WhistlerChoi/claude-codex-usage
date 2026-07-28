@@ -35,8 +35,8 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundleName</key><string>Pulse</string>
   <key>CFBundleDisplayName</key><string>Pulse</string>
   <key>CFBundleIdentifier</key><string>xyz.agle.pulse</string>
-  <key>CFBundleVersion</key><string>1.0.2</string>
-  <key>CFBundleShortVersionString</key><string>1.0.2</string>
+  <key>CFBundleVersion</key><string>1.0.3</string>
+  <key>CFBundleShortVersionString</key><string>1.0.3</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleExecutable</key><string>$BIN_NAME</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>

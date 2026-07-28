@@ -79,7 +79,7 @@ func peakUtilization(u *usageResp) float64 {
 }
 
 const maxRetry = 3600 * time.Second // upper bound on retry delay (1 hour)
-const retryFloor = 60 * time.Second  // floor for 429 backoff (60s)
+const retryFloor = 60 * time.Second // floor for 429 backoff (60s)
 
 // nextRetryDelay: delay until the next poll after a transient failure.
 //   - if retryAfter>0, honor it (do not clamp to interval; only cap at maxRetry).
@@ -111,6 +111,27 @@ func nextRetryDelay(consecutiveFailures int, interval, retryAfter time.Duration,
 		}
 	}
 	return base + time.Duration(float64(base)*0.2*jitter)
+}
+
+// formatRetryIn: line telling the user when the next automatic retry happens, e.g. "Retrying in 45s",
+// "Retrying in 2m", "Retrying in 1h 5m". Shown for transient failures (network, HTTP 429) so a
+// throttle is never mistaken for a login problem.
+func formatRetryIn(d time.Duration) string {
+	total := int(d / time.Second)
+	if total < 0 {
+		total = 0
+	}
+	if total < 60 {
+		return fmt.Sprintf("Retrying in %ds", total)
+	}
+	if total < 3600 {
+		return fmt.Sprintf("Retrying in %dm", total/60)
+	}
+	hours, mins := total/3600, (total%3600)/60
+	if mins > 0 {
+		return fmt.Sprintf("Retrying in %dh %dm", hours, mins)
+	}
+	return fmt.Sprintf("Retrying in %dh", hours)
 }
 
 // shouldShowStale: stale if age since last success is at least interval*3.

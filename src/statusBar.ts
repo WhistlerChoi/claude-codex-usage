@@ -1,7 +1,7 @@
 import * as vscode from "vscode";
 import type { UsageData } from "./usageClient";
 import type { CurrentModel } from "./model";
-import { statusBarText, tooltipMarkdown, peakUtilization } from "./format";
+import { statusBarText, tooltipMarkdown, peakUtilization, formatRetryIn } from "./format";
 
 export interface Thresholds {
   warn: number;
@@ -48,10 +48,24 @@ export class UsageStatusBar {
     }
   }
 
+  /** Auth / credentials failure — the user really does have to log in. */
   showError(message: string): void {
     this.item.text = "$(error) Claude login required";
     this.item.backgroundColor = new vscode.ThemeColor("statusBarItem.errorBackground");
     const md = new vscode.MarkdownString(`**Could not fetch usage**\n\n${message}\n\nClick to retry`);
+    this.item.tooltip = md;
+  }
+
+  /**
+   * Transient failure (network, HTTP 429) with no previous value to show. Deliberately does NOT say
+   * "login required": logging in cannot fix a rate limit, and saying so sends the user in circles.
+   */
+  showTransient(message: string, retryInMs: number): void {
+    this.item.text = "$(warning) Pulse ··";
+    this.item.backgroundColor = new vscode.ThemeColor("statusBarItem.warningBackground");
+    const md = new vscode.MarkdownString(
+      `**Could not fetch usage**\n\n${message}\n\n${formatRetryIn(retryInMs)} · Click to retry now`
+    );
     this.item.tooltip = md;
   }
 

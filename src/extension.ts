@@ -66,8 +66,10 @@ async function refresh(force = false): Promise<void> {
       } else if (lastUsage) {
         statusBar.showUsage(lastUsage, new Date(), thresholds, true, lastModel);
       } else {
+        // No value to fall back on — but this is transient (network, HTTP 429), not an auth
+        // problem, so do not tell the user to log in.
         const msg = err instanceof Error ? err.message : String(err);
-        statusBar.showError(msg);
+        statusBar.showTransient(msg, nextDelayMs);
       }
     }
   } finally {

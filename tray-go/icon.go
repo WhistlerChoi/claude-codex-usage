@@ -7,6 +7,7 @@ import (
 	"image/color"
 	"image/png"
 	"runtime"
+	"unicode/utf8"
 
 	"golang.org/x/image/draw"
 	"golang.org/x/image/font"
@@ -78,8 +79,10 @@ func renderIconPNG(text, bgHex string) []byte {
 		}
 	}
 
-	// draw the digits with a small bitmap font, then scale up and center them
-	tw := 7 * len(text)
+	// draw the digits with a small bitmap font, then scale up and center them.
+	// Count runes, not bytes: non-ASCII text is multi-byte and would otherwise reserve more width
+	// than it needs, shrinking the glyphs and pushing them off-center.
+	tw := 7 * utf8.RuneCountInString(text)
 	th := 13
 	tmp := image.NewRGBA(image.Rect(0, 0, tw, th))
 	d := &font.Drawer{
@@ -121,14 +124,14 @@ func pngToICO(pngBytes []byte) []byte {
 	_ = binary.Write(&buf, binary.LittleEndian, uint16(1)) // type: icon
 	_ = binary.Write(&buf, binary.LittleEndian, uint16(1)) // count
 	// ICONDIRENTRY
-	buf.WriteByte(iconSize) // width
-	buf.WriteByte(iconSize) // height
-	buf.WriteByte(0)        // color count
-	buf.WriteByte(0)        // reserved
-	_ = binary.Write(&buf, binary.LittleEndian, uint16(1))               // planes
-	_ = binary.Write(&buf, binary.LittleEndian, uint16(32))              // bit count
-	_ = binary.Write(&buf, binary.LittleEndian, uint32(len(pngBytes)))   // bytes in res
-	_ = binary.Write(&buf, binary.LittleEndian, uint32(6+16))            // image offset
+	buf.WriteByte(iconSize)                                            // width
+	buf.WriteByte(iconSize)                                            // height
+	buf.WriteByte(0)                                                   // color count
+	buf.WriteByte(0)                                                   // reserved
+	_ = binary.Write(&buf, binary.LittleEndian, uint16(1))             // planes
+	_ = binary.Write(&buf, binary.LittleEndian, uint16(32))            // bit count
+	_ = binary.Write(&buf, binary.LittleEndian, uint32(len(pngBytes))) // bytes in res
+	_ = binary.Write(&buf, binary.LittleEndian, uint32(6+16))          // image offset
 	buf.Write(pngBytes)
 	return buf.Bytes()
 }
