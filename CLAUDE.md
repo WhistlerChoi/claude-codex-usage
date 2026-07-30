@@ -37,13 +37,36 @@ So all three ports read **every** store that has credentials and use the one wit
   tie-break matters for writeback: a refreshed (rotated) token must land where Claude Code reads
   it, or Claude Code's own stored refresh token gets revoked out from under it.
 - An unparseable or tokenless store is skipped, never fatal.
-- Consequence on macOS: the keychain is read every poll, so each app asks for keychain permission
-  once (the user clicks *Always Allow*). That prompt is expected, not a bug.
+- Consequence on macOS: the keychain is read every poll **through the `security` CLI** (see the
+  next CRITICAL section), which is **promptless** in the healthy state. Any keychain permission
+  dialog naming `Claude Code-credentials` is a symptom of a corrupted partition list, not
+  expected behavior — see the Troubleshooting section in `menubar/README.md`.
 
 Only `menubar/` refreshes tokens itself (`TokenRefresh.swift`). Two rules there: never send a token
 already past `expiresAt` (report instead — a doomed request is what earns the 429), and keep every
 refreshed token in the in-memory cache even when writeback fails, so the next poll cannot reuse an
 already-rotated (revoked) refresh token.
+
+### CRITICAL: keychain access goes through `/usr/bin/security`, never Security.framework
+
+Claude Code manages the `Claude Code-credentials` item exclusively via the `security` CLI
+(find/add/delete-generic-password), so the item carries the **`apple-tool:` partition list** and
+every `security`-based reader — Claude Code itself and all three ports — reads it with **zero
+prompts**. A single native `SecItemAdd`/`SecItemUpdate` write from any app re-stamps the item with
+*that app's* partition instead; from then on Claude Code's own `security find-generic-password`
+fails the partition check and macOS shows a **keychain password dialog on every Claude Code
+start** — repeatedly, because the item keeps being rewritten, so granting access never sticks.
+This shipped once (menubar commit `1a85f32`, reverted) and produced exactly that popup loop.
+
+Rules, all ports:
+
+- Every touch of the item — read **and** write — must spawn `/usr/bin/security` (menubar uses the
+  absolute path; do not "harden" it back to `SecItem*`).
+- Writeback (`menubar/` only) is **update-only**: if the item is absent, Claude Code has logged
+  out — never create it (resurrecting stale credentials mid-login races Claude Code's own
+  delete+add). The secret is passed hex-encoded (`-X`) over `security -i` stdin, never argv.
+- The write path self-heals a corrupted item: when `add-generic-password -U` is denied, it
+  deletes and re-adds, restoring the `apple-tool:` partition.
 
 ### CRITICAL: `utilization` is 0–100, not 0–1
 

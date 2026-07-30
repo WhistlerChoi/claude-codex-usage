@@ -126,7 +126,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString")
-            as? String ?? "1.0.1"
+            as? String ?? "1.0.2"
 
         let win = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 460, height: 380),
@@ -632,6 +632,56 @@ if CommandLine.arguments.contains("--selftest") {
     check(formatRetryIn(3599) == "Retrying in 59m", "formatRetryIn 59m (no 60m)")
     check(formatRetryIn(3600) == "Retrying in 1h", "formatRetryIn 1h")
     check(formatRetryIn(3900) == "Retrying in 1h 5m", "formatRetryIn 1h 5m")
+
+    // hexEncode: the `add-generic-password -X` payload format (lowercase, zero-padded).
+    check(hexEncode(Data()) == "", "hexEncode empty")
+    check(hexEncode(Data([0x00, 0x7b, 0xff])) == "007bff", "hexEncode pads and lowercases")
+    check(hexEncode(Data("{}".utf8)) == "7b7d", "hexEncode JSON braces")
+
+    // securityQuote: `security -i` tokenizer escapes (\" -> literal quote, \\ -> literal backslash).
+    check(securityQuote("abc") == "\"abc\"", "securityQuote plain token")
+    check(securityQuote("a b") == "\"a b\"", "securityQuote keeps spaces inside one token")
+    check(securityQuote("a\"b") == "\"a\\\"b\"", "securityQuote escapes double quote")
+    check(securityQuote("a\\b") == "\"a\\\\b\"", "securityQuote escapes backslash")
+    check(securityQuote("a\\\"b") == "\"a\\\\\\\"b\"", "securityQuote escapes backslash+quote")
+
+    // addGenericPasswordCommandLine: exact shape Claude Code feeds to `security -i`.
+    check(addGenericPasswordCommandLine(
+              account: "seolhochoi", service: "Claude Code-credentials", hexPayload: "7b7d")
+          == "add-generic-password -U -a \"seolhochoi\" -s \"Claude Code-credentials\" -X \"7b7d\"\n",
+          "addGenericPasswordCommandLine -U shape + trailing newline")
+    check(addGenericPasswordCommandLine(
+              account: "u", service: "s", hexPayload: "00", update: false)
+          == "add-generic-password -a \"u\" -s \"s\" -X \"00\"\n",
+          "addGenericPasswordCommandLine without -U (self-heal re-add)")
+
+    // stdin-vs-argv selection: exactly securityStdinLimit goes to stdin, one more byte to argv.
+    let fixedOverhead = addGenericPasswordCommandLine(
+        account: "seolhochoi", service: "Claude Code-credentials", hexPayload: "").utf8.count
+    let atLimit = addGenericPasswordCommandLine(
+        account: "seolhochoi", service: "Claude Code-credentials",
+        hexPayload: String(repeating: "a", count: securityStdinLimit - fixedOverhead))
+    check(atLimit.utf8.count == securityStdinLimit, "command line sized exactly at the stdin limit")
+    check(atLimit.utf8.count <= securityStdinLimit && atLimit.utf8.count + 1 > securityStdinLimit,
+          "one more byte would select the argv fallback")
+
+    // parseKeychainAccount: promptless `find-generic-password` attribute output.
+    let findOutput = """
+    keychain: "/Users/seolhochoi/Library/Keychains/login.keychain-db"
+    version: 512
+    class: "genp"
+    attributes:
+        0x00000007 <blob>="Claude Code-credentials"
+        "acct"<blob>="seolhochoi"
+        "svce"<blob>="Claude Code-credentials"
+    """
+    check(parseKeychainAccount(fromFindOutput: findOutput) == "seolhochoi",
+          "parseKeychainAccount reads acct")
+    check(parseKeychainAccount(fromFindOutput: "    \"acct\"<blob>=<NULL>\n") == nil,
+          "parseKeychainAccount NULL acct -> nil")
+    check(parseKeychainAccount(fromFindOutput: "") == nil, "parseKeychainAccount empty -> nil")
+    check(parseKeychainAccount(fromFindOutput: "    \"svce\"<blob>=\"x\"\n") == nil,
+          "parseKeychainAccount ignores non-acct attributes")
 
     print(failures == 0 ? "ALL PASS" : "\(failures) FAILURE(S)")
     exit(failures == 0 ? 0 : 1)

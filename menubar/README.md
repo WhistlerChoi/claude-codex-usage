@@ -78,11 +78,37 @@ spctl --assess --type execute Pulse.app
   `message.model` field is used; conversation content is never displayed or transmitted.
 - **Where data goes:** the token is sent only to `https://api.anthropic.com` to fetch
   usage. Nothing else leaves your machine; there is no analytics or telemetry.
-- **What it stores:** nothing. The token stays in memory and is re-read on every poll.
+- **What it stores:** nothing of its own. When Pulse refreshes the OAuth token (see
+  `TokenRefresh.swift`) it writes the rotated token back to the store Claude Code reads,
+  so the two stay in sync; otherwise the token lives only in memory.
+- **How the keychain is accessed:** via `/usr/bin/security` — the same mechanism Claude
+  Code itself uses — so no keychain permission dialog appears. On writes the token is
+  passed hex-encoded over `security -i` stdin, never on the command line.
 - **Heads-up:** the usage endpoint (`/api/oauth/usage`) is an undocumented Claude Code
   internal API and may change or stop working without notice.
 - **Affiliation:** Pulse is an independent product, not affiliated with or endorsed by
   Anthropic. Claude is a trademark of Anthropic, PBC.
+
+## Troubleshooting
+
+### macOS keeps asking for a password for "Claude Code-credentials"
+
+A repeating dialog like *"security wants to access key 'Claude Code-credentials' in your
+keychain"* (with a password field) means the keychain item's partition list was corrupted:
+some app once rewrote the item with the native keychain API instead of the `security` CLI,
+which locks Claude Code out of its own credentials. (Pulse versions before 2026-07 could do
+this during token writeback; current Pulse cannot, and self-heals the item on its next
+writeback.) One-time fixes, either of:
+
+```bash
+# Repair the partition list in place (asks for your login keychain password once):
+security set-generic-password-partition-list -S apple-tool:,apple: -s "Claude Code-credentials"
+```
+
+or run `/logout` followed by `/login` inside Claude Code, which recreates the item cleanly.
+
+If a "wants to access" dialog ever does appear, click **Always Allow** — plain "Allow"
+grants access once and the dialog returns on the next poll.
 
 ## Settings / fine-tuning
 
