@@ -15,11 +15,13 @@ mkdir -p "$APP/Contents/MacOS"
 mkdir -p "$APP/Contents/Resources"
 cp ".build/release/$BIN_NAME" "$APP/Contents/MacOS/$BIN_NAME"
 
-# Copy the resource bundle SwiftPM generated (About header PNG, etc.) so Bundle.module can find it.
-RES_BUNDLE=".build/release/${BIN_NAME}_${BIN_NAME}.bundle"
-if [ -d "$RES_BUNDLE" ]; then
-  cp -R "$RES_BUNDLE" "$APP/Contents/Resources/"
-fi
+# About header PNG. Copy the source file straight into Contents/Resources so
+# Bundle.main finds it on every machine. Do NOT copy SwiftPM's Pulse_Pulse.bundle
+# instead: its Bundle.module accessor resolves to the build machine's absolute
+# .build path and fatalErrors elsewhere (About crashed the app on other Macs).
+# Unconditional on purpose — with `set -e` a missing PNG fails the build loudly
+# rather than silently shipping an .app without the resource.
+cp "Sources/$BIN_NAME/Resources/header.png" "$APP/Contents/Resources/header.png"
 
 # App icon (gauge glyph matching the About header). Regenerate from make-icon.swift if missing.
 if [ ! -f "AppIcon.icns" ]; then
@@ -36,8 +38,8 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundleName</key><string>Pulse</string>
   <key>CFBundleDisplayName</key><string>Pulse</string>
   <key>CFBundleIdentifier</key><string>com.wemeet.pulse</string>
-  <key>CFBundleVersion</key><string>1.0.2</string>
-  <key>CFBundleShortVersionString</key><string>1.0.2</string>
+  <key>CFBundleVersion</key><string>1.0.3</string>
+  <key>CFBundleShortVersionString</key><string>1.0.3</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleExecutable</key><string>$BIN_NAME</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
