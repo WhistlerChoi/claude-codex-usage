@@ -29,6 +29,11 @@ const (
 	colorError  = "#777777"
 )
 
+// maxDetailItems: hidden menu items pre-created at startup (systray cannot add items later).
+// Worst case: stale banner + 5h + Weekly + legacy Opus/Sonnet + N scoped weekly + model.
+// 10 covers 4 scoped models; beyond that only the menu truncates — the tooltip stays complete.
+const maxDetailItems = 10
+
 func main() {
 	// --render [out.png]: save the icon image as a PNG and exit (for verification)
 	if len(os.Args) > 1 && os.Args[1] == "--render" {
@@ -47,7 +52,7 @@ func onReady() {
 	systray.SetTitle("")
 	systray.SetTooltip("Pulse Loading...")
 
-	for i := 0; i < 6; i++ {
+	for i := 0; i < maxDetailItems; i++ {
 		it := systray.AddMenuItem("", "")
 		it.Hide()
 		detailItems = append(detailItems, it)
@@ -150,11 +155,20 @@ func detailLines(u *usageResp, model *currentModel) []string {
 		fmt.Sprintf("5h: %d%% · %s", pct(u.FiveHour.Utilization), formatResetIn(u.FiveHour.ResetsAt, now)),
 		fmt.Sprintf("Weekly: %d%% · %s", pct(u.SevenDay.Utilization), formatResetIn(u.SevenDay.ResetsAt, now)),
 	}
+	legacyModels := map[string]bool{}
 	if u.SevenDayOpus != nil {
 		lines = append(lines, fmt.Sprintf("Weekly Opus: %d%% · %s", pct(u.SevenDayOpus.Utilization), formatResetIn(u.SevenDayOpus.ResetsAt, now)))
+		legacyModels["Opus"] = true
 	}
 	if u.SevenDaySonnet != nil {
 		lines = append(lines, fmt.Sprintf("Weekly Sonnet: %d%% · %s", pct(u.SevenDaySonnet.Utilization), formatResetIn(u.SevenDaySonnet.ResetsAt, now)))
+		legacyModels["Sonnet"] = true
+	}
+	for _, s := range u.WeeklyScoped {
+		if legacyModels[s.Model] { // legacy field already rendered this model
+			continue
+		}
+		lines = append(lines, fmt.Sprintf("Weekly %s: %d%% · %s", s.Model, pct(s.Window.Utilization), formatResetIn(s.Window.ResetsAt, now)))
 	}
 	if model != nil {
 		lines = append(lines, fmt.Sprintf("Current model: %s (%s)", model.Name, model.ID))

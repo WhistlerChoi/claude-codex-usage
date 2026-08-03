@@ -5,16 +5,23 @@ struct UsageWindow {
     let resetsAt: String?
 }
 
+/// A per-model weekly window from the `limits` array (kind == "weekly_scoped").
+struct ScopedWeeklyWindow {
+    let model: String   // scope.model.display_name, e.g. "Fable"
+    let window: UsageWindow
+}
+
 struct UsageData {
     let fiveHour: UsageWindow
     let sevenDay: UsageWindow
     let sevenDayOpus: UsageWindow?
     let sevenDaySonnet: UsageWindow?
+    let weeklyScoped: [ScopedWeeklyWindow]
 }
 
 /// One aligned row of the menu usage table: label | percent | reset text.
 struct UsageRow {
-    let label: String   // "5h", "Weekly", "Weekly Opus", "Weekly Sonnet"
+    let label: String   // "5h", "Weekly", "Weekly Opus", "Weekly Fable", ...
     let pct: Int         // 0-100
     let reset: String    // already-formatted, e.g. "resets in 4h 26m"
 }
@@ -48,6 +55,26 @@ private func parseWindow(_ any: Any?) -> UsageWindow? {
     return UsageWindow(utilization: num.doubleValue, resetsAt: d["resets_at"] as? String)
 }
 
+/// Per-model weekly windows from the `limits` array. The value key there is `percent`
+/// (integer 0-100, same unit as `utilization`). Lenient: a missing/non-array `limits`
+/// or a malformed entry is skipped, never fatal.
+private func parseWeeklyScoped(_ any: Any?) -> [ScopedWeeklyWindow] {
+    guard let items = any as? [Any] else { return [] }
+    var out: [ScopedWeeklyWindow] = []
+    for item in items {
+        guard let d = item as? [String: Any],
+              d["kind"] as? String == "weekly_scoped",
+              let percent = d["percent"] as? NSNumber,
+              let scope = d["scope"] as? [String: Any],
+              let model = (scope["model"] as? [String: Any])?["display_name"] as? String,
+              !model.isEmpty else { continue }
+        out.append(ScopedWeeklyWindow(
+            model: model,
+            window: UsageWindow(utilization: percent.doubleValue, resetsAt: d["resets_at"] as? String)))
+    }
+    return out
+}
+
 /// Raw JSON -> UsageData
 func parseUsage(_ json: Any) throws -> UsageData {
     guard let obj = json as? [String: Any],
@@ -59,7 +86,8 @@ func parseUsage(_ json: Any) throws -> UsageData {
         fiveHour: five,
         sevenDay: week,
         sevenDayOpus: parseWindow(obj["seven_day_opus"]),
-        sevenDaySonnet: parseWindow(obj["seven_day_sonnet"])
+        sevenDaySonnet: parseWindow(obj["seven_day_sonnet"]),
+        weeklyScoped: parseWeeklyScoped(obj["limits"])
     )
 }
 

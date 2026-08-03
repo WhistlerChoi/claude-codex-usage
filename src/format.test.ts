@@ -9,6 +9,17 @@ const sampleRaw = {
   seven_day: { utilization: 8, resets_at: "2026-06-10T07:00:00+00:00" },
   seven_day_opus: null,
   seven_day_sonnet: { utilization: 3, resets_at: null },
+  limits: [
+    { kind: "session", group: "session", percent: 42, resets_at: "2026-06-04T11:50:00+00:00", scope: null },
+    { kind: "weekly_all", group: "weekly", percent: 8, resets_at: "2026-06-10T07:00:00+00:00", scope: null },
+    {
+      kind: "weekly_scoped",
+      group: "weekly",
+      percent: 12,
+      resets_at: "2026-06-10T07:00:00+00:00",
+      scope: { model: { id: null, display_name: "Fable" }, surface: null },
+    },
+  ],
 };
 
 test("parseUsage maps fields", () => {
@@ -17,10 +28,34 @@ test("parseUsage maps fields", () => {
   assert.equal(u.sevenDay.resetsAt, "2026-06-10T07:00:00+00:00");
   assert.equal(u.sevenDayOpus, null);
   assert.equal(u.sevenDaySonnet?.utilization, 3);
+  assert.deepEqual(u.weeklyScoped, [
+    { model: "Fable", window: { utilization: 12, resetsAt: "2026-06-10T07:00:00+00:00" } },
+  ]);
 });
 
 test("parseUsage throws when required windows missing", () => {
   assert.throws(() => parseUsage({ five_hour: { utilization: 10 } }));
+});
+
+test("parseUsage tolerates missing/malformed limits", () => {
+  const base = { five_hour: { utilization: 1 }, seven_day: { utilization: 2 } };
+  assert.deepEqual(parseUsage(base).weeklyScoped, []);
+  assert.deepEqual(parseUsage({ ...base, limits: null }).weeklyScoped, []);
+  assert.deepEqual(parseUsage({ ...base, limits: "x" }).weeklyScoped, []);
+  assert.deepEqual(parseUsage({ ...base, limits: 5 }).weeklyScoped, []);
+  // Malformed entries are skipped individually; the valid sibling still parses.
+  const u = parseUsage({
+    ...base,
+    limits: [
+      "junk",
+      { kind: "weekly_scoped", percent: 7 }, // no scope
+      { kind: "weekly_scoped", percent: "12", scope: { model: { display_name: "X" } } }, // percent not a number
+      { kind: "weekly_scoped", percent: 7, scope: { model: { display_name: null } } },
+      { kind: "weekly_all", percent: 7, scope: { model: { display_name: "Y" } } }, // wrong kind
+      { kind: "weekly_scoped", percent: 12, scope: { model: { display_name: "Fable" } } },
+    ],
+  });
+  assert.deepEqual(u.weeklyScoped, [{ model: "Fable", window: { utilization: 12, resetsAt: null } }]);
 });
 
 test("pct rounds percent value directly", () => {
@@ -66,6 +101,28 @@ test("tooltipMarkdown includes sonnet but not opus when opus null", () => {
   assert.match(md, /5h/);
   assert.match(md, /Weekly Sonnet/);
   assert.doesNotMatch(md, /Weekly Opus/);
+});
+
+test("tooltipMarkdown includes scoped weekly windows after Weekly", () => {
+  const u = parseUsage(sampleRaw);
+  const now = new Date("2026-06-04T10:00:00Z");
+  const md = tooltipMarkdown(u, now, now);
+  assert.match(md, /\*\*Weekly Fable\*\*: 12% · resets in 5d 21h/);
+  assert.ok(md.indexOf("**Weekly Fable**") > md.indexOf("**Weekly**"));
+});
+
+test("tooltipMarkdown dedupes scoped entry against legacy field", () => {
+  const u = parseUsage({
+    ...sampleRaw,
+    limits: [
+      { kind: "weekly_scoped", percent: 3, scope: { model: { display_name: "Sonnet" } } },
+      { kind: "weekly_scoped", percent: 12, scope: { model: { display_name: "Fable" } } },
+    ],
+  });
+  const now = new Date("2026-06-04T10:00:00Z");
+  const md = tooltipMarkdown(u, now, now);
+  assert.equal(md.match(/Weekly Sonnet/g)?.length, 1); // legacy seven_day_sonnet wins
+  assert.match(md, /Weekly Fable/);
 });
 
 const noJitter = () => 0; // jitter 0 → base unchanged

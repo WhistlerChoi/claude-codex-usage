@@ -17,7 +17,7 @@ Three front-ends that display Claude Code's **5-hour / weekly usage** (and curre
 ## Shared architecture (same 4 modules in every implementation)
 
 1. **credentials** — read the OAuth `accessToken` from `~/.claude/.credentials.json` (JSON path `claudeAiOauth.accessToken`, fallback `accessToken`) **and**, on macOS, keychain item `Claude Code-credentials`. **Freshest wins** — see below. Re-read every poll so Claude Code's token refresh is picked up automatically.
-2. **usageClient** — `GET https://api.anthropic.com/api/oauth/usage` with headers `Authorization: Bearer <token>` and `anthropic-beta: oauth-2025-04-20`. Response: `five_hour`, `seven_day`, `seven_day_opus`, `seven_day_sonnet`, each `{ utilization, resets_at }`. 401/403 → auth error (distinct from network errors).
+2. **usageClient** — `GET https://api.anthropic.com/api/oauth/usage` with headers `Authorization: Bearer <token>` and `anthropic-beta: oauth-2025-04-20`. Response: `five_hour`, `seven_day` (each `{ utilization, resets_at }`), legacy `seven_day_opus`/`seven_day_sonnet` (now typically `null`), and a `limits` array whose `kind == "weekly_scoped"` entries carry per-model weekly usage as `{ percent, resets_at, scope.model.display_name }` — note the value key is `percent` (integer 0–100, same unit as `utilization`), and these render as `Weekly <display_name>` (e.g. "Weekly Fable"). `limits` parsing is lenient in all three ports (missing/malformed → empty list, never fatal); a scoped entry whose model name a legacy field already rendered is skipped. 401/403 → auth error (distinct from network errors).
 3. **model** — best-effort current model. Scan `~/.claude/projects/**/*.jsonl`, pick the most recently modified transcript, read the **last** line's `message.model`. `friendlyModelName` maps e.g. `claude-opus-4-8` → `Opus 4.8`. Failure is non-fatal (model is optional in the UI).
 4. **format** — pure functions (status text, tooltip, relative reset time). The unit tests live here and in `model`.
 
@@ -113,7 +113,7 @@ swift build -c release && ./.build/release/Pulse
 
 ## Conventions
 
-- **UI strings are English (English-only).** Keep all user-facing text (tooltips, menu items, errors) in English. Shared UI strings must read identically across all three ports (e.g. "Refresh Now", "About", "Quit", "Login needed", "resets in 1h 50m", window labels "5h"/"Weekly"/"Weekly Opus"/"Weekly Sonnet").
+- **UI strings are English (English-only).** Keep all user-facing text (tooltips, menu items, errors) in English. Shared UI strings must read identically across all three ports (e.g. "Refresh Now", "About", "Quit", "Login needed", "resets in 1h 50m", window labels "5h"/"Weekly"/"Weekly Opus"/"Weekly Sonnet"/`Weekly <model>` from `scope.model.display_name`, e.g. "Weekly Fable").
 - **Config / polling:** VSCode reads `pulse.refreshInterval` / `warnThreshold` / `alertThreshold` from settings; the other three apps use env var `CLAUDE_USAGE_INTERVAL` (seconds, default 300, min 10). Color thresholds 80% (warn) / 95% (alert) are hard-coded in the non-VSCode ports.
 - **No git repo here** — this directory is not under version control.
 - Design notes: `docs/superpowers/specs/2026-06-04-claude-usage-extension-design.md` (note its `0.0–1.0` claim is outdated; see the utilization note above).
