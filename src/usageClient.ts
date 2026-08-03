@@ -9,11 +9,19 @@ export interface UsageWindow {
   resetsAt: string | null;
 }
 
+/** Per-model weekly window from the `limits` array (kind == "weekly_scoped"). */
+export interface ScopedWeeklyWindow {
+  /** Model display name from scope.model.display_name, e.g. "Fable". */
+  model: string;
+  window: UsageWindow;
+}
+
 export interface UsageData {
   fiveHour: UsageWindow;
   sevenDay: UsageWindow;
   sevenDayOpus: UsageWindow | null;
   sevenDaySonnet: UsageWindow | null;
+  weeklyScoped: ScopedWeeklyWindow[];
 }
 
 export class AuthError extends Error {}
@@ -51,6 +59,32 @@ function parseWindow(raw: unknown): UsageWindow | null {
   };
 }
 
+/**
+ * Per-model weekly windows from the `limits` array. The value key here is `percent`
+ * (integer 0-100, same unit as `utilization`). Lenient: a missing/non-array `limits`
+ * or a malformed entry is skipped, never fatal.
+ */
+function parseWeeklyScoped(raw: unknown): ScopedWeeklyWindow[] {
+  if (!Array.isArray(raw)) return [];
+  const out: ScopedWeeklyWindow[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== "object") continue;
+    const obj = item as Record<string, unknown>;
+    if (obj.kind !== "weekly_scoped" || typeof obj.percent !== "number") continue;
+    const scope = obj.scope as Record<string, unknown> | null | undefined;
+    const model = (scope?.model as Record<string, unknown> | null | undefined)?.display_name;
+    if (typeof model !== "string" || model === "") continue;
+    out.push({
+      model,
+      window: {
+        utilization: obj.percent,
+        resetsAt: typeof obj.resets_at === "string" ? obj.resets_at : null,
+      },
+    });
+  }
+  return out;
+}
+
 /** Convert raw API JSON into UsageData (pure function, tested). */
 export function parseUsage(json: unknown): UsageData {
   const obj = (json && typeof json === "object" ? json : {}) as Record<string, unknown>;
@@ -64,6 +98,7 @@ export function parseUsage(json: unknown): UsageData {
     sevenDay,
     sevenDayOpus: parseWindow(obj.seven_day_opus),
     sevenDaySonnet: parseWindow(obj.seven_day_sonnet),
+    weeklyScoped: parseWeeklyScoped(obj.limits),
   };
 }
 

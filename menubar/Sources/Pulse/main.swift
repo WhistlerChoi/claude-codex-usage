@@ -300,13 +300,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             UsageRow(label: "Weekly", pct: pct(usage.sevenDay.utilization),
                      reset: formatResetIn(usage.sevenDay.resetsAt)),
         ]
+        var legacyModels = Set<String>()
         if let opus = usage.sevenDayOpus {
-            rows.append(UsageRow(label: "Opus", pct: pct(opus.utilization),
+            rows.append(UsageRow(label: "Weekly Opus", pct: pct(opus.utilization),
                                  reset: formatResetIn(opus.resetsAt)))
+            legacyModels.insert("Opus")
         }
         if let sonnet = usage.sevenDaySonnet {
-            rows.append(UsageRow(label: "Sonnet", pct: pct(sonnet.utilization),
+            rows.append(UsageRow(label: "Weekly Sonnet", pct: pct(sonnet.utilization),
                                  reset: formatResetIn(sonnet.resetsAt)))
+            legacyModels.insert("Sonnet")
+        }
+        for scoped in usage.weeklyScoped where !legacyModels.contains(scoped.model) {
+            rows.append(UsageRow(label: "Weekly \(scoped.model)", pct: pct(scoped.window.utilization),
+                                 reset: formatResetIn(scoped.window.resetsAt)))
         }
 
         var footer: [String] = []
@@ -705,6 +712,31 @@ if CommandLine.arguments.contains("--selftest") {
     check(parseKeychainAccount(fromFindOutput: "    \"svce\"<blob>=\"x\"\n") == nil,
           "parseKeychainAccount ignores non-acct attributes")
 
+    // parseUsage: weekly_scoped entries from the limits array.
+    let usageJSON: [String: Any] = [
+        "five_hour": ["utilization": 42, "resets_at": "2026-06-04T11:50:00+00:00"],
+        "seven_day": ["utilization": 8, "resets_at": "2026-06-10T07:00:00+00:00"],
+        "limits": [
+            ["kind": "session", "percent": 42, "scope": NSNull()],
+            ["kind": "weekly_scoped", "percent": 12, "resets_at": "2026-06-10T07:00:00+00:00",
+             "scope": ["model": ["id": NSNull(), "display_name": "Fable"], "surface": NSNull()]],
+        ],
+    ]
+    if let u = try? parseUsage(usageJSON) {
+        check(u.weeklyScoped.count == 1, "parseUsage yields one weekly_scoped entry")
+        check(u.weeklyScoped.first?.model == "Fable", "weekly_scoped model is Fable")
+        check(u.weeklyScoped.first?.window.utilization == 12, "weekly_scoped percent -> utilization")
+    } else {
+        check(false, "parseUsage with limits parsed")
+    }
+
+    // parseUsage: missing/malformed limits is never fatal.
+    let noLimits: [String: Any] = ["five_hour": ["utilization": 1], "seven_day": ["utilization": 2]]
+    check((try? parseUsage(noLimits))?.weeklyScoped.isEmpty == true, "absent limits -> empty weeklyScoped")
+    var badLimits = noLimits
+    badLimits["limits"] = "x"
+    check((try? parseUsage(badLimits))?.weeklyScoped.isEmpty == true, "malformed limits -> empty weeklyScoped")
+
     print(failures == 0 ? "ALL PASS" : "\(failures) FAILURE(S)")
     exit(failures == 0 ? 0 : 1)
 }
@@ -719,6 +751,9 @@ if CommandLine.arguments.contains("--once") {
             print("[gauge] " + menuBarText(usage))
             print("  5h:     \(pct(usage.fiveHour.utilization))% · \(formatResetIn(usage.fiveHour.resetsAt))")
             print("  Weekly: \(pct(usage.sevenDay.utilization))% · \(formatResetIn(usage.sevenDay.resetsAt))")
+            for scoped in usage.weeklyScoped {
+                print("  Weekly \(scoped.model): \(pct(scoped.window.utilization))% · \(formatResetIn(scoped.window.resetsAt))")
+            }
             if let model = model { print("  Model:  \(model.name) (\(model.id))") }
         } catch {
             print("Error: \(error.localizedDescription)")
@@ -756,8 +791,9 @@ if let idx = CommandLine.arguments.firstIndex(of: "--menu") {
     let rows = [
         UsageRow(label: "5h", pct: 3, reset: "resets in 2h 13m"),
         UsageRow(label: "Weekly", pct: 27, reset: "resets in 4d 6h"),
-        UsageRow(label: "Opus", pct: 100, reset: "resets in 4d 6h"),
-        UsageRow(label: "Sonnet", pct: 8, reset: "resets in 16h 16m"),
+        UsageRow(label: "Weekly Opus", pct: 100, reset: "resets in 4d 6h"),
+        UsageRow(label: "Weekly Sonnet", pct: 8, reset: "resets in 16h 16m"),
+        UsageRow(label: "Weekly Fable", pct: 12, reset: "resets in 4d 6h"),
     ]
     let view = makeUsageTableView(rows: rows)
     view.wantsLayer = true

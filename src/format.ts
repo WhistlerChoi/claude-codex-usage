@@ -60,11 +60,18 @@ export function tooltipMarkdown(
     windowLine("5h", usage.fiveHour, now),
     windowLine("Weekly", usage.sevenDay, now),
   ];
+  const legacyModels = new Set<string>();
   if (usage.sevenDayOpus) {
     lines.push(windowLine("Weekly Opus", usage.sevenDayOpus, now));
+    legacyModels.add("Opus");
   }
   if (usage.sevenDaySonnet) {
     lines.push(windowLine("Weekly Sonnet", usage.sevenDaySonnet, now));
+    legacyModels.add("Sonnet");
+  }
+  for (const scoped of usage.weeklyScoped) {
+    if (legacyModels.has(scoped.model)) continue; // legacy field already rendered this model
+    lines.push(windowLine(`Weekly ${scoped.model}`, scoped.window, now));
   }
   if (model) {
     lines.push("", `**Current model**: ${model.name} (\`${model.id}\`)`);

@@ -42,11 +42,54 @@ type window struct {
 	ResetsAt    *string `json:"resets_at"`
 }
 
+// scopedWindow: a per-model weekly window from the `limits` array (kind == "weekly_scoped").
+type scopedWindow struct {
+	Model  string // scope.model.display_name, e.g. "Fable"
+	Window window
+}
+
 type usageResp struct {
-	FiveHour       *window `json:"five_hour"`
-	SevenDay       *window `json:"seven_day"`
-	SevenDayOpus   *window `json:"seven_day_opus"`
-	SevenDaySonnet *window `json:"seven_day_sonnet"`
+	FiveHour       *window         `json:"five_hour"`
+	SevenDay       *window         `json:"seven_day"`
+	SevenDayOpus   *window         `json:"seven_day_opus"`
+	SevenDaySonnet *window         `json:"seven_day_sonnet"`
+	Limits         json.RawMessage `json:"limits"`
+	WeeklyScoped   []scopedWindow  `json:"-"` // derived from Limits by parseWeeklyScoped
+}
+
+// parseWeeklyScoped: per-model weekly windows from the limits array. The value key there is
+// `percent` (integer 0-100, same unit as `utilization`). Lenient: a missing/non-array limits
+// or a malformed entry is skipped, never fatal.
+func parseWeeklyScoped(raw json.RawMessage) []scopedWindow {
+	if len(raw) == 0 {
+		return nil
+	}
+	var items []json.RawMessage
+	if err := json.Unmarshal(raw, &items); err != nil {
+		return nil
+	}
+	var out []scopedWindow
+	for _, item := range items {
+		var e struct {
+			Kind     string   `json:"kind"`
+			Percent  *float64 `json:"percent"`
+			ResetsAt *string  `json:"resets_at"`
+			Scope    *struct {
+				Model *struct {
+					DisplayName *string `json:"display_name"`
+				} `json:"model"`
+			} `json:"scope"`
+		}
+		if json.Unmarshal(item, &e) != nil || e.Kind != "weekly_scoped" || e.Percent == nil ||
+			e.Scope == nil || e.Scope.Model == nil || e.Scope.Model.DisplayName == nil || *e.Scope.Model.DisplayName == "" {
+			continue
+		}
+		out = append(out, scopedWindow{
+			Model:  *e.Scope.Model.DisplayName,
+			Window: window{Utilization: *e.Percent, ResetsAt: e.ResetsAt},
+		})
+	}
+	return out
 }
 
 func fetchUsage() (*usageResp, error) {
@@ -89,5 +132,6 @@ func fetchUsage() (*usageResp, error) {
 	if u.FiveHour == nil || u.SevenDay == nil {
 		return nil, errors.New("invalid usage response format")
 	}
+	u.WeeklyScoped = parseWeeklyScoped(u.Limits)
 	return &u, nil
 }
