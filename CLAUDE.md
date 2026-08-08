@@ -106,6 +106,7 @@ go run . --render /tmp/icon.png && open /tmp/icon.png   # preview icon only
 **Swift menu bar (`menubar/`)** — from `menubar/`:
 ```bash
 ./build-app.sh                 # → Pulse.app
+CODESIGN_IDENTITY="Developer ID Application: … (TEAMID)" ./release.sh   # + notarize/staple/DMG (NOTARY_PROFILE, SKIP_DMG=1)
 swift build -c release && ./.build/release/Pulse
 ./.build/release/Pulse --once     # print values once, no menu bar
 ./.build/release/Pulse --render /tmp/preview.png   # preview rendered title
@@ -114,6 +115,6 @@ swift build -c release && ./.build/release/Pulse
 ## Conventions
 
 - **UI strings are English (English-only).** Keep all user-facing text (tooltips, menu items, errors) in English. Shared UI strings must read identically across all three ports (e.g. "Refresh Now", "About", "Quit", "Login needed", "resets in 1h 50m", window labels "5h"/"Weekly"/"Weekly Opus"/"Weekly Sonnet"/`Weekly <model>` from `scope.model.display_name`, e.g. "Weekly Fable").
-- **Config / polling:** VSCode reads `pulse.refreshInterval` / `warnThreshold` / `alertThreshold` from settings; the other three apps use env var `CLAUDE_USAGE_INTERVAL` (seconds, default 300, min 10). Color thresholds 80% (warn) / 95% (alert) are hard-coded in the non-VSCode ports.
-- **No git repo here** — this directory is not under version control.
+- **Config / polling:** VSCode reads `pulse.refreshInterval` / `warnThreshold` / `alertThreshold` from settings; the other two apps use env var `CLAUDE_USAGE_INTERVAL` (seconds, default 300, min 10). Color thresholds 80% (warn) / 95% (alert) are hard-coded in the non-VSCode ports.
+- **Git:** remote `WhistlerChoi/claude-usage`; branch off **`main`** and target it in PRs (every PR to date does). `dev` is a stale leftover branch sitting behind `main` — ignore it, even though local `origin/HEAD` may still point there.
 - Design notes: `docs/superpowers/specs/2026-06-04-claude-usage-extension-design.md` (note its `0.0–1.0` claim is outdated; see the utilization note above).
