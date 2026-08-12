@@ -3,6 +3,7 @@ import AppKit
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
     private var timer: Timer?
+    private var codexTimer: Timer?
     private let interval: TimeInterval
 
     private var lastUsage: UsageData?
@@ -12,6 +13,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var consecutiveFailures = 0
     private var inFlight = false
     private var aboutWindow: NSWindow?
+    private var lastCodexUsage: CodexUsage?
+    private var codexLoginNeeded = false
+    private var codexInFlight = false
 
     // Two-line display fine-tuning (adjustable via env vars, no rebuild needed)
     private let fontSize: CGFloat       // CLAUDE_USAGE_FONT_SIZE (default 9)
@@ -43,6 +47,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         rebuildMenu(detailLines: ["Loading..."])
 
         refresh()
+        refreshCodex()
     }
 
     @objc func refresh() {
@@ -69,10 +74,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    @objc func refreshCodex() {
+        if codexInFlight { return }
+        codexInFlight = true
+        Task.detached { [weak self] in
+            guard let self else { return }
+            do {
+                let usage = try await fetchCodexUsage()
+                await MainActor.run {
+                    self.codexInFlight = false
+                    self.renderCodexUsage(usage)
+                    self.scheduleNextCodex(self.interval)
+                }
+            } catch {
+                await MainActor.run {
+                    self.codexInFlight = false
+                    self.handleCodexError(error)
+                    self.scheduleNextCodex(self.interval)
+                }
+            }
+        }
+    }
+
     private func scheduleNext(_ delay: TimeInterval) {
         timer?.invalidate()
         timer = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { [weak self] _ in
             self?.refresh()
+        }
+    }
+
+    private func scheduleNextCodex(_ delay: TimeInterval) {
+        codexTimer?.invalidate()
+        codexTimer = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { [weak self] _ in
+            self?.refreshCodex()
         }
     }
 
@@ -81,10 +115,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc func login() {
+        openTerminal(command: "claude")
+    }
+
+    @objc func loginCodex() {
+        openTerminal(command: "codex login")
+    }
+
+    private func openTerminal(command: String) {
         let script = """
         tell application "Terminal"
             activate
-            do script "claude"
+            do script "\(command)"
         end tell
         """
         var err: NSDictionary?
@@ -99,7 +141,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             alert.informativeText = """
                 Pulse needs permission to control Terminal. \
                 Allow it in System Settings > Privacy & Security > Automation, \
-                or run "claude" in a terminal yourself.
+                or run "\(command)" in a terminal yourself.
 
                 (\(detail))
                 """
@@ -185,7 +227,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let versionLabel = label("Version \(version)", size: 12, color: .secondaryLabelColor)
         let desc = label(
-            "Shows Claude Code's 5-hour and weekly usage\nand the current model in your menu bar.",
+            "Shows Claude Code and Codex usage\nin your menu bar.",
             size: 12, color: .labelColor)
         let meta = label(
             "Data: ~/.claude · /usage API   ·   Poll interval: \(Int(interval))s",
@@ -281,6 +323,49 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return img
     }
 
+    private func renderCodexUsage(_ usage: CodexUsage) {
+        lastCodexUsage = usage
+        codexLoginNeeded = false
+        if let usage = lastUsage {
+            renderUsage(usage, lastModel)
+        } else {
+            setStacked(top: "Cx", bottom: "\(usage.usedPercent)%", color: colorForPercent(usage.usedPercent))
+            rebuildMenu(detailLines: [
+                "Codex: \(usage.usedPercent)% · \(formatResetIn(usage.resetsAt))"
+            ])
+        }
+    }
+
+    private func handleCodexError(_ error: Error) {
+        if case CodexUsageError.credentialsNotFound = error {
+            codexLoginNeeded = true
+            if let usage = lastUsage {
+                renderUsage(usage, lastModel)
+            } else {
+                setStacked(top: "Cx", bottom: "Login", color: .systemRed)
+                rebuildMenu(detailLines: [error.localizedDescription], showCodexLogin: true)
+            }
+        } else if case CodexUsageError.auth = error {
+            codexLoginNeeded = true
+            if let usage = lastUsage {
+                renderUsage(usage, lastModel)
+            } else {
+                setStacked(top: "Cx", bottom: "Login", color: .systemRed)
+                rebuildMenu(detailLines: [error.localizedDescription], showCodexLogin: true)
+            }
+        } else if let usage = lastUsage {
+            renderUsage(usage, lastModel)
+        } else {
+            rebuildMenu(detailLines: [error.localizedDescription])
+        }
+    }
+
+    private func colorForPercent(_ percent: Int) -> NSColor? {
+        if percent >= 95 { return .systemRed }
+        if percent >= 80 { return .systemOrange }
+        return nil
+    }
+
     // MARK: - Rendering
 
     private func renderUsage(_ usage: UsageData, _ model: CurrentModel?) {
@@ -288,11 +373,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         lastModel = model
         lastUpdated = Date()
 
-        setStacked(
-            top: "\(pct(usage.fiveHour.utilization))%",
-            bottom: "\(pct(usage.sevenDay.utilization))%",
-            color: colorForPeak(peakUtilization(usage))
-        )
+        renderPrimaryDisplay()
 
         var rows: [UsageRow] = [
             UsageRow(label: "5h", pct: pct(usage.fiveHour.utilization),
@@ -315,6 +396,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             rows.append(UsageRow(label: "Weekly \(scoped.model)", pct: pct(scoped.window.utilization),
                                  reset: formatResetIn(scoped.window.resetsAt)))
         }
+        // Keep Codex immediately below the model-scoped Claude rows (normally Weekly Fable).
+        if let codex = lastCodexUsage {
+            rows.append(UsageRow(label: "Codex", pct: codex.usedPercent,
+                                 reset: formatResetIn(codex.resetsAt)))
+        }
 
         var footer: [String] = []
         if let model = model {
@@ -322,7 +408,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         footer.append("Updated: \(clockString(lastUpdated!))")
 
-        rebuildMenu(usageRows: rows, footerLines: footer)
+        rebuildMenu(usageRows: rows, footerLines: footer, showCodexLogin: codexLoginNeeded)
+    }
+
+    /// Keep both providers in the original, always-visible status item. A second
+    /// status item can be hidden by macOS when the menu bar is crowded, so the
+    /// primary item is the reliable display path for Codex too.
+    private func renderPrimaryDisplay() {
+        guard let usage = lastUsage else { return }
+        if let codex = lastCodexUsage {
+            setStacked(
+                top: "Cl \(pct(usage.fiveHour.utilization))%",
+                bottom: "Cx \(codex.usedPercent)%",
+                color: colorForPercent(max(pct(usage.fiveHour.utilization), codex.usedPercent)))
+        } else {
+            setStacked(
+                top: "\(pct(usage.fiveHour.utilization))%",
+                bottom: "\(pct(usage.sevenDay.utilization))%",
+                color: colorForPeak(peakUtilization(usage)))
+        }
     }
 
     /// Update the error display and return the delay (seconds) until the next poll.
@@ -387,7 +491,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     /// Plain text rows (used by the error / auth / "Loading..." paths). Not column-aligned.
-    private func rebuildMenu(detailLines: [String], showLogin: Bool = false) {
+    private func rebuildMenu(detailLines: [String], showLogin: Bool = false, showCodexLogin: Bool = false) {
         let menu = NSMenu()
         menu.autoenablesItems = false  // so the info lines are not shown dimmed (disabled)
         for line in detailLines {
@@ -402,12 +506,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             )
             menu.addItem(item)
         }
-        appendInteractiveItems(to: menu, showLogin: showLogin)
+        appendInteractiveItems(to: menu, showLogin: showLogin, showCodexLogin: showCodexLogin)
         statusItem.menu = menu
     }
 
     /// Aligned usage table (3 columns) plus a de-emphasized footer (model / updated).
-    private func rebuildMenu(usageRows: [UsageRow], footerLines: [String]) {
+    private func rebuildMenu(usageRows: [UsageRow], footerLines: [String], showCodexLogin: Bool = false) {
         let menu = NSMenu()
         menu.autoenablesItems = false
 
@@ -431,16 +535,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 menu.addItem(item)
             }
         }
-        appendInteractiveItems(to: menu, showLogin: false)
+        appendInteractiveItems(to: menu, showLogin: false, showCodexLogin: showCodexLogin)
         statusItem.menu = menu
     }
 
     /// Shared tail: separator + (optional Login) + About / Refresh Now / Quit.
-    private func appendInteractiveItems(to menu: NSMenu, showLogin: Bool) {
+    private func appendInteractiveItems(to menu: NSMenu, showLogin: Bool, showCodexLogin: Bool) {
         menu.addItem(.separator())
         if showLogin {
             let loginItem = NSMenuItem(
                 title: "Log In via Claude Code", action: #selector(login), keyEquivalent: "l")
+            loginItem.target = self
+            menu.addItem(loginItem)
+        }
+        if showCodexLogin {
+            let loginItem = NSMenuItem(
+                title: "Log In via Codex", action: #selector(loginCodex), keyEquivalent: "l")
             loginItem.target = self
             menu.addItem(loginItem)
         }
@@ -755,6 +865,23 @@ if CommandLine.arguments.contains("--once") {
                 print("  Weekly \(scoped.model): \(pct(scoped.window.utilization))% · \(formatResetIn(scoped.window.resetsAt))")
             }
             if let model = model { print("  Model:  \(model.name) (\(model.id))") }
+        } catch {
+            print("Error: \(error.localizedDescription)")
+        }
+        sema.signal()
+    }
+    sema.wait()
+    exit(0)
+}
+
+// --codex-once: print Codex usage once without starting the menu bar app.
+if CommandLine.arguments.contains("--codex-once") {
+    let sema = DispatchSemaphore(value: 0)
+    Task {
+        do {
+            let usage = try await fetchCodexUsage()
+            print("[codex] \(usage.usedPercent)% · \(formatResetIn(usage.resetsAt))")
+            if let plan = usage.planType { print("  Plan: \(plan)") }
         } catch {
             print("Error: \(error.localizedDescription)")
         }

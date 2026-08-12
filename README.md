@@ -1,6 +1,7 @@
 # Pulse
 
 Always-visible display of Claude Code's **5-hour / weekly usage** (plus the current model).
+The macOS menu-bar app also displays current **Codex usage** alongside Claude Code.
 It reads the same data the `/usage` command uses, and offers the same core logic across three platform UIs.
 
 ## Implementations
@@ -12,6 +13,7 @@ It reads the same data the `/usage` command uses, and offers the same core logic
 | [`menubar/`](menubar/) | macOS menu bar | Swift / AppKit | Menu-bar only (no Dock icon) |
 
 `src/` is the reference implementation; `tray-go` and `menubar` are hand-ports of the same design in each language.
+The Codex integration is currently implemented in `menubar/` only and is kept independent from the Claude usage provider.
 For building/running the tray and menu-bar apps, see the README in each folder. Below are instructions for the **VSCode extension**.
 
 ---

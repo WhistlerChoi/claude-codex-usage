@@ -40,6 +40,24 @@ func formatResetIn(_ resetsAt: String?, now: Date = Date()) -> String {
     return "resets in " + parts.joined(separator: " ")
 }
 
+/// Time remaining until a Date-based reset (used by the Codex provider).
+func formatResetIn(_ resetsAt: Date?, now: Date = Date()) -> String {
+    guard let target = resetsAt else { return "reset time unknown" }
+    let diff = target.timeIntervalSince(now)
+    if diff <= 0 { return "resets soon" }
+
+    let totalMin = Int(diff / 60)
+    let days = totalMin / (60 * 24)
+    let hours = (totalMin % (60 * 24)) / 60
+    let mins = totalMin % 60
+    var parts: [String] = []
+    if days > 0 { parts.append("\(days)d") }
+    if hours > 0 { parts.append("\(hours)h") }
+    if days == 0 && mins > 0 { parts.append("\(mins)m") }
+    if parts.isEmpty { parts.append("<1m") }
+    return "resets in " + parts.joined(separator: " ")
+}
+
 /// Peak utilization across the two windows (0-1 fraction).
 func peakUtilization(_ usage: UsageData) -> Double {
     max(usage.fiveHour.utilization, usage.sevenDay.utilization) / 100.0
