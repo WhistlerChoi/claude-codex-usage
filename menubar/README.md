@@ -2,10 +2,10 @@
 
 A native Swift app that always shows the same info as the VSCode extension (5-hour / weekly usage + current model) in the **macOS menu bar (top right)**.
 
-The menu bar shows only a gauge icon + compact usage (to blend in with the neighboring CPU/memory/network icons):
+The menu bar shows Claude and Codex usage together in the original Pulse item (to blend in with the neighboring CPU/memory/network icons):
 
 ```
-◐ 5% · 4%      (5h % · weekly %)
+◐ Cl 5% / Cx 20%
 ```
 
 Clicking it opens a dropdown with details (time remaining until reset, weekly Opus/Sonnet, current model, last update) plus `Refresh Now` / `Quit`. When usage is high, the menu-bar text color turns orange (80%+) / red (95%+).
@@ -19,6 +19,11 @@ It uses the same source as the VSCode extension (ported to Swift):
 - Usage: `https://api.anthropic.com/api/oauth/usage`
 - Token: `~/.claude/.credentials.json` → macOS keychain if absent
 - Current model: the last `message.model` from the most recent transcript among `~/.claude/projects/**/*.jsonl`
+
+Codex usage is fetched independently from `https://chatgpt.com/backend-api/wham/usage`.
+The app reads the Codex access token from `CODEX_HOME/auth.json` or `~/.codex/auth.json`,
+but never uses or writes the refresh token. The Codex endpoint is an internal client
+endpoint and may change with future Codex versions.
 
 ## Build & run
 
@@ -76,8 +81,10 @@ spctl --assess --type execute Pulse.app
   falling back to the `Claude Code-credentials` keychain item) and, to show the current
   model, the local transcripts under `~/.claude/projects/**/*.jsonl` — only the
   `message.model` field is used; conversation content is never displayed or transmitted.
-- **Where data goes:** the token is sent only to `https://api.anthropic.com` to fetch
-  usage. Nothing else leaves your machine; there is no analytics or telemetry.
+  For Codex, it reads `CODEX_HOME/auth.json` or `~/.codex/auth.json`.
+- **Where data goes:** the Claude token is sent only to `https://api.anthropic.com` and
+  the Codex token only to `https://chatgpt.com` to fetch usage. Nothing else leaves your
+  machine; there is no analytics or telemetry.
 - **What it stores:** nothing of its own. When Pulse refreshes the OAuth token (see
   `TokenRefresh.swift`) it writes the rotated token back to the store Claude Code reads,
   so the two stay in sync; otherwise the token lives only in memory.
@@ -88,6 +95,8 @@ spctl --assess --type execute Pulse.app
   internal API and may change or stop working without notice.
 - **Affiliation:** Pulse is an independent product, not affiliated with or endorsed by
   Anthropic. Claude is a trademark of Anthropic, PBC.
+- **Codex notice:** Codex and ChatGPT are trademarks of OpenAI. Pulse is not affiliated
+  with or endorsed by OpenAI.
 
 ## Troubleshooting
 

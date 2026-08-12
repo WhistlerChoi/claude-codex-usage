@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-Three front-ends that display Claude Code's **5-hour / weekly usage** (and current model) in an always-visible UI surface. They all read the same data the `/usage` command uses and share identical core logic — only the presentation layer differs per platform.
+Three front-ends that display Claude Code's **5-hour / weekly usage** (and current model) in an always-visible UI surface. The macOS menu-bar app additionally displays current Codex usage. The Claude provider shares identical core logic across platforms; the Codex provider is currently menubar-specific.
 
 | Dir | Platform / surface | Stack |
 |---|---|---|
@@ -13,6 +13,11 @@ Three front-ends that display Claude Code's **5-hour / weekly usage** (and curre
 | `menubar/` | macOS menu bar | Swift / AppKit — core re-ported |
 
 `src/` is the source of truth. `tray-go/` and `menubar/` are hand-ports of the same four-module design, so **a logic change in `src/` must be mirrored** into `tray-go/*.go` and `menubar/Sources/Pulse/*.swift`.
+
+`menubar/` also contains `CodexUsageClient.swift`. It reads the Codex access token from
+`CODEX_HOME/auth.json` (or `~/.codex/auth.json`) and displays the current Codex rate-limit
+usage in the existing Pulse menu-bar item. This provider is independent from the Claude
+provider and is not part of the VSCode or tray implementations.
 
 ## Shared architecture (same 4 modules in every implementation)
 
