@@ -1,5 +1,11 @@
 import AppKit
 
+func colorForPercent(_ percent: Int) -> NSColor? {
+    if percent >= 95 { return .systemRed }
+    if percent >= 80 { return .systemOrange }
+    return nil
+}
+
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
     private var timer: Timer?
@@ -360,12 +366,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    private func colorForPercent(_ percent: Int) -> NSColor? {
-        if percent >= 95 { return .systemRed }
-        if percent >= 80 { return .systemOrange }
-        return nil
-    }
-
     // MARK: - Rendering
 
     private func renderUsage(_ usage: UsageData, _ model: CurrentModel?) {
@@ -417,10 +417,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func renderPrimaryDisplay() {
         guard let usage = lastUsage else { return }
         if let codex = lastCodexUsage {
+            let claudePercent = pct(usage.fiveHour.utilization)
             setStacked(
-                top: "Cl \(pct(usage.fiveHour.utilization))%",
+                top: "Cl \(claudePercent)%",
                 bottom: "Cx \(codex.usedPercent)%",
-                color: colorForPercent(max(pct(usage.fiveHour.utilization), codex.usedPercent)))
+                topColor: colorForPercent(claudePercent),
+                bottomColor: colorForPercent(codex.usedPercent))
         } else {
             setStacked(
                 top: "\(pct(usage.fiveHour.utilization))%",
@@ -477,17 +479,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Display two stacked lines in the menu bar (network-speed-indicator style).
     /// Draw directly into an image sized to the menu-bar height for precise vertical control.
     private func setStacked(top: String, bottom: String, color: NSColor?) {
+        setStacked(top: top, bottom: bottom, topColor: color, bottomColor: color)
+    }
+
+    private func setStacked(
+        top: String, bottom: String, topColor: NSColor?, bottomColor: NSColor?
+    ) {
         guard let button = statusItem.button else { return }
         button.title = ""
         button.imagePosition = .imageOnly
-        button.image = renderStackedImage(top: top, bottom: bottom, color: color)
+        button.effectiveAppearance.performAsCurrentDrawingAppearance {
+            button.image = renderStackedImage(
+                top: top, bottom: bottom, topColor: topColor, bottomColor: bottomColor,
+                normalColor: .labelColor)
+        }
     }
 
-    private func renderStackedImage(top: String, bottom: String, color: NSColor?) -> NSImage {
+    private func renderStackedImage(
+        top: String, bottom: String, topColor: NSColor?, bottomColor: NSColor?,
+        normalColor: NSColor
+    ) -> NSImage {
         renderStacked(
-            top: top, bottom: bottom, color: color,
+            top: top, bottom: bottom, topColor: topColor, bottomColor: bottomColor,
             fontSize: fontSize, weight: fontWeight, lineGap: lineGap, yOffset: yOffset,
-            height: NSStatusBar.system.thickness)
+            height: NSStatusBar.system.thickness, normalColor: normalColor)
     }
 
     /// Plain text rows (used by the error / auth / "Loading..." paths). Not column-aligned.
@@ -620,15 +635,23 @@ func makeUsageTableView(rows: [UsageRow]) -> NSView {
 
 /// Render two stacked lines into an image sized to height (the menu-bar height).
 func renderStacked(
-    top: String, bottom: String, color: NSColor?,
-    fontSize: CGFloat, weight: NSFont.Weight, lineGap: CGFloat, yOffset: CGFloat, height: CGFloat
+    top: String, bottom: String, topColor: NSColor?, bottomColor: NSColor?,
+    fontSize: CGFloat, weight: NSFont.Weight, lineGap: CGFloat, yOffset: CGFloat, height: CGFloat,
+    normalColor: NSColor = .labelColor
 ) -> NSImage {
     let font = NSFont.monospacedDigitSystemFont(ofSize: fontSize, weight: weight)
-    let drawColor = color ?? .black
-    let attrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: drawColor]
+    let isTemplate = topColor == nil && bottomColor == nil
+    let topAttrs: [NSAttributedString.Key: Any] = [
+        .font: font,
+        .foregroundColor: topColor ?? (isTemplate ? NSColor.black : normalColor),
+    ]
+    let bottomAttrs: [NSAttributedString.Key: Any] = [
+        .font: font,
+        .foregroundColor: bottomColor ?? (isTemplate ? NSColor.black : normalColor),
+    ]
 
-    let topSize = (top as NSString).size(withAttributes: attrs)
-    let botSize = (bottom as NSString).size(withAttributes: attrs)
+    let topSize = (top as NSString).size(withAttributes: topAttrs)
+    let botSize = (bottom as NSString).size(withAttributes: bottomAttrs)
     let width = ceil(max(topSize.width, botSize.width)) + 2
 
     let image = NSImage(size: NSSize(width: width, height: height))
@@ -637,11 +660,11 @@ func renderStacked(
     let topY = centerY + lineGap / 2 - topSize.height / 2
     let botY = centerY - lineGap / 2 - botSize.height / 2
     (top as NSString).draw(
-        at: NSPoint(x: (width - topSize.width) / 2, y: topY), withAttributes: attrs)
+        at: NSPoint(x: (width - topSize.width) / 2, y: topY), withAttributes: topAttrs)
     (bottom as NSString).draw(
-        at: NSPoint(x: (width - botSize.width) / 2, y: botY), withAttributes: attrs)
+        at: NSPoint(x: (width - botSize.width) / 2, y: botY), withAttributes: bottomAttrs)
     image.unlockFocus()
-    image.isTemplate = (color == nil)
+    image.isTemplate = isTemplate
     return image
 }
 
@@ -657,7 +680,7 @@ if let idx = CommandLine.arguments.firstIndex(of: "--render") {
     let height = NSStatusBar.system.thickness
     // Use black text (non-template) to check the layout
     let img = renderStacked(
-        top: "5%", bottom: "4%", color: .black,
+        top: "5%", bottom: "4%", topColor: .black, bottomColor: .black,
         fontSize: num("CLAUDE_USAGE_FONT_SIZE", 9),
         weight: NSFont.Weight(num("CLAUDE_USAGE_FONT_WEIGHT", Double(NSFont.Weight.bold.rawValue))),
         lineGap: num("CLAUDE_USAGE_LINE_GAP", 10),
@@ -771,6 +794,16 @@ if CommandLine.arguments.contains("--selftest") {
     check(formatRetryIn(3599) == "Retrying in 59m", "formatRetryIn 59m (no 60m)")
     check(formatRetryIn(3600) == "Retrying in 1h", "formatRetryIn 1h")
     check(formatRetryIn(3900) == "Retrying in 1h 5m", "formatRetryIn 1h 5m")
+
+    // Per-provider menu-bar colors: each displayed percentage crosses thresholds independently.
+    check(colorForPercent(79) == nil, "usage color below warning threshold")
+    check(colorForPercent(80) == .systemOrange, "usage color at warning threshold")
+    check(colorForPercent(95) == .systemRed, "usage color at alert threshold")
+    let independentImage = renderStacked(
+        top: "Cl 81%", bottom: "Cx 20%", topColor: .systemOrange, bottomColor: nil,
+        fontSize: 9, weight: .bold, lineGap: 10, yOffset: 0,
+        height: NSStatusBar.system.thickness)
+    check(!independentImage.isTemplate, "stacked display preserves independent line colors")
 
     // hexEncode: the `add-generic-password -X` payload format (lowercase, zero-padded).
     check(hexEncode(Data()) == "", "hexEncode empty")
