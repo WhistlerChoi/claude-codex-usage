@@ -4,6 +4,8 @@ Always-visible display of Claude Code's **5-hour / weekly usage** (plus the curr
 The macOS menu-bar app also displays current **Codex usage** alongside Claude Code.
 It reads the same data the `/usage` command uses, and offers the same core logic across three platform UIs.
 
+<img width="430" height="317" alt="Screenshot 2026-08-26 at 13 43 29" src="https://github.com/user-attachments/assets/68538655-f369-4308-8604-6e92ac848f64" />
+
 ## Implementations
 
 | Folder | Surface | Stack | Notes |
@@ -24,7 +26,6 @@ Always shows Claude Code's 5-hour / weekly usage in the VSCode status bar.
 
 ![status bar example](https://img.shields.io/badge/status%20bar-5h%2042%25%20%C2%B7%20wk%208%25-blue)
 
-<img width="430" height="317" alt="Screenshot 2026-08-26 at 13 43 29" src="https://github.com/user-attachments/assets/68538655-f369-4308-8604-6e92ac848f64" />
 
 ## Features
 
