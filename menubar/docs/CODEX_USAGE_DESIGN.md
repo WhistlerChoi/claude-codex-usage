@@ -13,17 +13,21 @@ the existing Claude Code display and failure behavior unchanged.
   `https://chatgpt.com/backend-api/wham/usage`.
 - Refresh tokens are never used or written by Pulse.
 - Claude and Codex have separate timers, cached values, error states, and menu items.
-- The existing Pulse status item is reused. Its two lines display Claude 5-hour usage
-  and Codex usage (`Cl <percent>%` / `Cx <percent>%`) once both providers have loaded.
-  The existing detail menu contains the Codex row as well.
+- The existing Pulse status item is reused. Its two lines display Claude and Codex
+  5-hour usage (`Cl <percent>%` / `Cx <percent>%`) once both providers have loaded.
+- The detail menu displays Claude and Codex in separate tables with a separator between
+  them. The Codex table contains both its 5-hour and weekly windows.
 
 ## Data mapping
 
 | API field | UI |
 |---|---|
-| `rate_limit.primary_window.used_percent` | Current Codex usage percentage |
-| `rate_limit.primary_window.reset_at` | Reset time |
-| `rate_limit.primary_window.reset_after_seconds` | Fallback reset duration |
+| `rate_limit.primary_window.used_percent` | Codex 5-hour usage percentage |
+| `rate_limit.primary_window.reset_at` | 5-hour reset time |
+| `rate_limit.primary_window.reset_after_seconds` | Fallback 5-hour reset duration |
+| `rate_limit.secondary_window.used_percent` | Codex weekly usage percentage |
+| `rate_limit.secondary_window.reset_at` | Weekly reset time |
+| `rate_limit.secondary_window.reset_after_seconds` | Fallback weekly reset duration |
 | `plan_type` | Plan label |
 | `credits.has_credits` / `credits.unlimited` | Credit status |
 

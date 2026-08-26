@@ -1,8 +1,13 @@
 import Foundation
 
-struct CodexUsage {
+struct CodexUsageWindow {
     let usedPercent: Int
     let resetsAt: Date?
+}
+
+struct CodexUsage {
+    let fiveHour: CodexUsageWindow
+    let weekly: CodexUsageWindow?
     let planType: String?
     let creditsAvailable: Bool
     let creditsUnlimited: Bool
@@ -53,8 +58,10 @@ private struct CodexUsageResponse: Decodable {
         }
 
         let primaryWindow: Window?
+        let secondaryWindow: Window?
         enum CodingKeys: String, CodingKey {
             case primaryWindow = "primary_window"
+            case secondaryWindow = "secondary_window"
         }
     }
 
@@ -103,12 +110,8 @@ private func readCodexCredentials() throws -> CodexCredentials {
     return CodexCredentials(accessToken: token, accountId: auth.tokens?.accountId)
 }
 
-private func parseCodexUsage(_ data: Data) throws -> CodexUsage {
-    guard let response = try? JSONDecoder().decode(CodexUsageResponse.self, from: data),
-          let window = response.rateLimit?.primaryWindow,
-          let rawPercent = window.usedPercent else {
-        throw CodexUsageError.malformed
-    }
+private func parseCodexWindow(_ window: CodexUsageResponse.RateLimit.Window?) -> CodexUsageWindow? {
+    guard let window, let rawPercent = window.usedPercent else { return nil }
     let percent = min(100, max(0, Int(rawPercent.rounded())))
     let reset: Date?
     if let epoch = window.resetAt {
@@ -118,9 +121,17 @@ private func parseCodexUsage(_ data: Data) throws -> CodexUsage {
     } else {
         reset = nil
     }
+    return CodexUsageWindow(usedPercent: percent, resetsAt: reset)
+}
+
+func parseCodexUsage(_ data: Data) throws -> CodexUsage {
+    guard let response = try? JSONDecoder().decode(CodexUsageResponse.self, from: data),
+          let fiveHour = parseCodexWindow(response.rateLimit?.primaryWindow) else {
+        throw CodexUsageError.malformed
+    }
     return CodexUsage(
-        usedPercent: percent,
-        resetsAt: reset,
+        fiveHour: fiveHour,
+        weekly: parseCodexWindow(response.rateLimit?.secondaryWindow),
         planType: response.planType,
         creditsAvailable: response.credits?.hasCredits ?? false,
         creditsUnlimited: response.credits?.unlimited ?? false)
@@ -142,4 +153,3 @@ func fetchCodexUsage() async throws -> CodexUsage {
     guard (200..<300).contains(http.statusCode) else { throw CodexUsageError.http(http.statusCode) }
     return try parseCodexUsage(data)
 }
-
