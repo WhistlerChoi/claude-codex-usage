@@ -2,10 +2,11 @@
 
 A native Swift app that always shows the same info as the VSCode extension (5-hour / weekly usage + current model) in the **macOS menu bar (top right)**.
 
-The menu bar shows Claude and Codex usage together in the original Pulse item (to blend in with the neighboring CPU/memory/network icons):
+The menu bar shows Claude and Codex usage together in the original Pulse item (to blend in with the neighboring CPU/memory/network icons). Five small segments after each percentage show the approximate time remaining in its 5-hour window; each filled segment is about one hour:
 
 ```
-◐ Cl 5% / Cx 20%
+Cl 5% ▮▮▮▮▯
+Cx 20% ▮▮▯▯▯
 ```
 
 Clicking it opens a dropdown with separate Claude and Codex sections. The Codex section shows both its 5-hour and weekly windows; the dropdown also includes reset times, weekly Claude model limits, the current Claude model, and the last update, plus `Refresh Now` / `Quit`. When usage is high, the menu-bar text color turns orange (80%+) / red (95%+).
