@@ -174,7 +174,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString")
-            as? String ?? "1.0.3"
+            as? String ?? "1.2.2"
 
         let win = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 460, height: 380),
@@ -335,10 +335,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let usage = lastUsage {
             renderUsage(usage, lastModel)
         } else {
-            setStacked(top: "Cx", bottom: "\(usage.usedPercent)%", color: colorForPercent(usage.usedPercent))
-            rebuildMenu(detailLines: [
-                "Codex: \(usage.usedPercent)% · \(formatResetIn(usage.resetsAt))"
-            ])
+            setStacked(
+                top: "Cx", bottom: "\(usage.fiveHour.usedPercent)%",
+                color: colorForPercent(usage.fiveHour.usedPercent))
+            var lines = [
+                "Codex 5h: \(usage.fiveHour.usedPercent)% · \(formatResetIn(usage.fiveHour.resetsAt))"
+            ]
+            if let weekly = usage.weekly {
+                lines.append("Codex Weekly: \(weekly.usedPercent)% · \(formatResetIn(weekly.resetsAt))")
+            }
+            rebuildMenu(detailLines: lines)
         }
     }
 
@@ -375,7 +381,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         renderPrimaryDisplay()
 
-        var rows: [UsageRow] = [
+        var claudeRows: [UsageRow] = [
             UsageRow(label: "5h", pct: pct(usage.fiveHour.utilization),
                      reset: formatResetIn(usage.fiveHour.resetsAt)),
             UsageRow(label: "Weekly", pct: pct(usage.sevenDay.utilization),
@@ -383,23 +389,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ]
         var legacyModels = Set<String>()
         if let opus = usage.sevenDayOpus {
-            rows.append(UsageRow(label: "Weekly Opus", pct: pct(opus.utilization),
+            claudeRows.append(UsageRow(label: "Weekly Opus", pct: pct(opus.utilization),
                                  reset: formatResetIn(opus.resetsAt)))
             legacyModels.insert("Opus")
         }
         if let sonnet = usage.sevenDaySonnet {
-            rows.append(UsageRow(label: "Weekly Sonnet", pct: pct(sonnet.utilization),
+            claudeRows.append(UsageRow(label: "Weekly Sonnet", pct: pct(sonnet.utilization),
                                  reset: formatResetIn(sonnet.resetsAt)))
             legacyModels.insert("Sonnet")
         }
         for scoped in usage.weeklyScoped where !legacyModels.contains(scoped.model) {
-            rows.append(UsageRow(label: "Weekly \(scoped.model)", pct: pct(scoped.window.utilization),
+            claudeRows.append(UsageRow(label: "Weekly \(scoped.model)", pct: pct(scoped.window.utilization),
                                  reset: formatResetIn(scoped.window.resetsAt)))
         }
-        // Keep Codex immediately below the model-scoped Claude rows (normally Weekly Fable).
+        var codexRows: [UsageRow] = []
         if let codex = lastCodexUsage {
-            rows.append(UsageRow(label: "Codex", pct: codex.usedPercent,
-                                 reset: formatResetIn(codex.resetsAt)))
+            codexRows.append(UsageRow(label: "Codex 5h", pct: codex.fiveHour.usedPercent,
+                                      reset: formatResetIn(codex.fiveHour.resetsAt)))
+            if let weekly = codex.weekly {
+                codexRows.append(UsageRow(label: "Codex Weekly", pct: weekly.usedPercent,
+                                          reset: formatResetIn(weekly.resetsAt)))
+            }
         }
 
         var footer: [String] = []
@@ -408,7 +418,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         footer.append("Updated: \(clockString(lastUpdated!))")
 
-        rebuildMenu(usageRows: rows, footerLines: footer, showCodexLogin: codexLoginNeeded)
+        rebuildMenu(
+            claudeRows: claudeRows, codexRows: codexRows, footerLines: footer,
+            showCodexLogin: codexLoginNeeded)
     }
 
     /// Keep both providers in the original, always-visible status item. A second
@@ -420,9 +432,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let claudePercent = pct(usage.fiveHour.utilization)
             setStacked(
                 top: "Cl \(claudePercent)%",
-                bottom: "Cx \(codex.usedPercent)%",
+                bottom: "Cx \(codex.fiveHour.usedPercent)%",
                 topColor: colorForPercent(claudePercent),
-                bottomColor: colorForPercent(codex.usedPercent))
+                bottomColor: colorForPercent(codex.fiveHour.usedPercent))
         } else {
             setStacked(
                 top: "\(pct(usage.fiveHour.utilization))%",
@@ -526,14 +538,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     /// Aligned usage table (3 columns) plus a de-emphasized footer (model / updated).
-    private func rebuildMenu(usageRows: [UsageRow], footerLines: [String], showCodexLogin: Bool = false) {
+    private func rebuildMenu(
+        claudeRows: [UsageRow], codexRows: [UsageRow], footerLines: [String],
+        showCodexLogin: Bool = false
+    ) {
         let menu = NSMenu()
         menu.autoenablesItems = false
 
-        let tableItem = NSMenuItem()
-        tableItem.isEnabled = true
-        tableItem.view = makeUsageTableView(rows: usageRows)
-        menu.addItem(tableItem)
+        func addUsageTable(_ rows: [UsageRow]) {
+            let tableItem = NSMenuItem()
+            tableItem.isEnabled = true
+            tableItem.view = makeUsageTableView(rows: rows)
+            menu.addItem(tableItem)
+        }
+
+        addUsageTable(claudeRows)
+        if !codexRows.isEmpty {
+            menu.addItem(.separator())
+            addUsageTable(codexRows)
+        }
 
         if !footerLines.isEmpty {
             menu.addItem(.separator())
@@ -880,6 +903,38 @@ if CommandLine.arguments.contains("--selftest") {
     badLimits["limits"] = "x"
     check((try? parseUsage(badLimits))?.weeklyScoped.isEmpty == true, "malformed limits -> empty weeklyScoped")
 
+    // parseCodexUsage: primary is the 5-hour window; secondary is the weekly window.
+    let codexJSON = #"""
+    {
+      "rate_limit": {
+        "primary_window": {"used_percent": 17.6, "reset_at": 1780000000},
+        "secondary_window": {"used_percent": 43.2, "reset_at": 1780500000}
+      },
+      "plan_type": "plus",
+      "credits": {"has_credits": true, "unlimited": false}
+    }
+    """#.data(using: .utf8)!
+    if let codex = try? parseCodexUsage(codexJSON) {
+        check(codex.fiveHour.usedPercent == 18, "parseCodexUsage primary -> 5h")
+        check(codex.weekly?.usedPercent == 43, "parseCodexUsage secondary -> weekly")
+        check(codex.fiveHour.resetsAt == Date(timeIntervalSince1970: 1_780_000_000),
+              "parseCodexUsage 5h reset_at")
+        check(codex.weekly?.resetsAt == Date(timeIntervalSince1970: 1_780_500_000),
+              "parseCodexUsage weekly reset_at")
+    } else {
+        check(false, "parseCodexUsage with both windows parsed")
+    }
+
+    // Older responses without a secondary window remain usable.
+    let codexPrimaryOnly = #"{"rate_limit":{"primary_window":{"used_percent":9}}}"#
+        .data(using: .utf8)!
+    if let codex = try? parseCodexUsage(codexPrimaryOnly) {
+        check(codex.fiveHour.usedPercent == 9, "parseCodexUsage keeps primary-only response")
+        check(codex.weekly == nil, "parseCodexUsage missing secondary -> no weekly window")
+    } else {
+        check(false, "parseCodexUsage primary-only response parsed")
+    }
+
     print(failures == 0 ? "ALL PASS" : "\(failures) FAILURE(S)")
     exit(failures == 0 ? 0 : 1)
 }
@@ -913,7 +968,11 @@ if CommandLine.arguments.contains("--codex-once") {
     Task {
         do {
             let usage = try await fetchCodexUsage()
-            print("[codex] \(usage.usedPercent)% · \(formatResetIn(usage.resetsAt))")
+            print("[codex]")
+            print("  5h:     \(usage.fiveHour.usedPercent)% · \(formatResetIn(usage.fiveHour.resetsAt))")
+            if let weekly = usage.weekly {
+                print("  Weekly: \(weekly.usedPercent)% · \(formatResetIn(weekly.resetsAt))")
+            }
             if let plan = usage.planType { print("  Plan: \(plan)") }
         } catch {
             print("Error: \(error.localizedDescription)")
@@ -954,6 +1013,8 @@ if let idx = CommandLine.arguments.firstIndex(of: "--menu") {
         UsageRow(label: "Weekly Opus", pct: 100, reset: "resets in 4d 6h"),
         UsageRow(label: "Weekly Sonnet", pct: 8, reset: "resets in 16h 16m"),
         UsageRow(label: "Weekly Fable", pct: 12, reset: "resets in 4d 6h"),
+        UsageRow(label: "Codex 5h", pct: 20, reset: "resets in 3h 1m"),
+        UsageRow(label: "Codex Weekly", pct: 48, reset: "resets in 5d 2h"),
     ]
     let view = makeUsageTableView(rows: rows)
     view.wantsLayer = true
