@@ -19,6 +19,23 @@ private func parseISODate(_ s: String) -> Date? {
     return plain.date(from: s)
 }
 
+/// Fraction of a fixed window still remaining until reset, clamped to 0...1.
+/// Returns nil when the provider did not supply a usable reset time.
+func resetProgress(
+    until resetsAt: Date?, window: TimeInterval = 5 * 60 * 60, now: Date = Date()
+) -> Double? {
+    guard let target = resetsAt, window > 0 else { return nil }
+    return min(1, max(0, target.timeIntervalSince(now) / window))
+}
+
+/// String-date overload used by the Claude usage response.
+func resetProgress(
+    until resetsAt: String?, window: TimeInterval = 5 * 60 * 60, now: Date = Date()
+) -> Double? {
+    guard let resetsAt, let target = parseISODate(resetsAt) else { return nil }
+    return resetProgress(until: target, window: window, now: now)
+}
+
 /// Time remaining until resetsAt, in English.
 func formatResetIn(_ resetsAt: String?, now: Date = Date()) -> String {
     guard let resetsAt = resetsAt, let target = parseISODate(resetsAt) else {

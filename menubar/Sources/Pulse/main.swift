@@ -434,12 +434,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 top: "Cl \(claudePercent)%",
                 bottom: "Cx \(codex.fiveHour.usedPercent)%",
                 topColor: colorForPercent(claudePercent),
-                bottomColor: colorForPercent(codex.fiveHour.usedPercent))
+                bottomColor: colorForPercent(codex.fiveHour.usedPercent),
+                topGauge: resetProgress(until: usage.fiveHour.resetsAt),
+                bottomGauge: resetProgress(until: codex.fiveHour.resetsAt))
+            statusItem.button?.toolTip = [
+                "Claude 5h: \(formatResetIn(usage.fiveHour.resetsAt))",
+                "Codex 5h: \(formatResetIn(codex.fiveHour.resetsAt))",
+                "Each gauge segment is about 1h remaining.",
+            ].joined(separator: "\n")
         } else {
             setStacked(
                 top: "\(pct(usage.fiveHour.utilization))%",
                 bottom: "\(pct(usage.sevenDay.utilization))%",
                 color: colorForPeak(peakUtilization(usage)))
+            statusItem.button?.toolTip = nil
         }
     }
 
@@ -495,7 +503,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func setStacked(
-        top: String, bottom: String, topColor: NSColor?, bottomColor: NSColor?
+        top: String, bottom: String, topColor: NSColor?, bottomColor: NSColor?,
+        topGauge: Double? = nil, bottomGauge: Double? = nil
     ) {
         guard let button = statusItem.button else { return }
         button.title = ""
@@ -503,18 +512,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         button.effectiveAppearance.performAsCurrentDrawingAppearance {
             button.image = renderStackedImage(
                 top: top, bottom: bottom, topColor: topColor, bottomColor: bottomColor,
-                normalColor: .labelColor)
+                normalColor: .labelColor, topGauge: topGauge, bottomGauge: bottomGauge)
         }
     }
 
     private func renderStackedImage(
         top: String, bottom: String, topColor: NSColor?, bottomColor: NSColor?,
-        normalColor: NSColor
+        normalColor: NSColor, topGauge: Double? = nil, bottomGauge: Double? = nil
     ) -> NSImage {
         renderStacked(
             top: top, bottom: bottom, topColor: topColor, bottomColor: bottomColor,
             fontSize: fontSize, weight: fontWeight, lineGap: lineGap, yOffset: yOffset,
-            height: NSStatusBar.system.thickness, normalColor: normalColor)
+            height: NSStatusBar.system.thickness, normalColor: normalColor,
+            topGauge: topGauge, bottomGauge: bottomGauge)
     }
 
     /// Plain text rows (used by the error / auth / "Loading..." paths). Not column-aligned.
@@ -660,7 +670,7 @@ func makeUsageTableView(rows: [UsageRow]) -> NSView {
 func renderStacked(
     top: String, bottom: String, topColor: NSColor?, bottomColor: NSColor?,
     fontSize: CGFloat, weight: NSFont.Weight, lineGap: CGFloat, yOffset: CGFloat, height: CGFloat,
-    normalColor: NSColor = .labelColor
+    normalColor: NSColor = .labelColor, topGauge: Double? = nil, bottomGauge: Double? = nil
 ) -> NSImage {
     let font = NSFont.monospacedDigitSystemFont(ofSize: fontSize, weight: weight)
     let isTemplate = topColor == nil && bottomColor == nil
@@ -675,17 +685,55 @@ func renderStacked(
 
     let topSize = (top as NSString).size(withAttributes: topAttrs)
     let botSize = (bottom as NSString).size(withAttributes: bottomAttrs)
-    let width = ceil(max(topSize.width, botSize.width)) + 2
+    let gaugeSegmentWidth: CGFloat = 1.5
+    let gaugeSegmentGap: CGFloat = 0.75
+    let gaugeSegments = 5
+    let gaugeWidth = CGFloat(gaugeSegments) * gaugeSegmentWidth
+        + CGFloat(gaugeSegments - 1) * gaugeSegmentGap
+    let gaugeSpacing: CGFloat = 3
+    func lineWidth(_ textWidth: CGFloat, _ progress: Double?) -> CGFloat {
+        textWidth + (progress == nil ? 0 : gaugeSpacing + gaugeWidth)
+    }
+    let topWidth = lineWidth(topSize.width, topGauge)
+    let botWidth = lineWidth(botSize.width, bottomGauge)
+    let width = ceil(max(topWidth, botWidth)) + 2
 
     let image = NSImage(size: NSSize(width: width, height: height))
     image.lockFocus()
     let centerY = height / 2 + yOffset
     let topY = centerY + lineGap / 2 - topSize.height / 2
     let botY = centerY - lineGap / 2 - botSize.height / 2
-    (top as NSString).draw(
-        at: NSPoint(x: (width - topSize.width) / 2, y: topY), withAttributes: topAttrs)
-    (bottom as NSString).draw(
-        at: NSPoint(x: (width - botSize.width) / 2, y: botY), withAttributes: bottomAttrs)
+    func drawLine(
+        _ text: String, size: NSSize, attrs: [NSAttributedString.Key: Any], y: CGFloat,
+        color: NSColor, progress: Double?
+    ) {
+        let contentWidth = lineWidth(size.width, progress)
+        let x = (width - contentWidth) / 2
+        (text as NSString).draw(at: NSPoint(x: x, y: y), withAttributes: attrs)
+        guard let progress else { return }
+
+        // Five compact segments make the 5h countdown scannable without adding another number.
+        // A partially elapsed hour keeps its segment until that hour is gone (ceil), like a
+        // battery indicator; faint empty segments make an imminent reset distinct from unknown.
+        let filled = Int(ceil(min(1, max(0, progress)) * Double(gaugeSegments)))
+        let gaugeX = x + size.width + gaugeSpacing
+        let gaugeHeight: CGFloat = 4
+        let gaugeY = y + (size.height - gaugeHeight) / 2
+        for index in 0..<gaugeSegments {
+            let rect = NSRect(
+                x: gaugeX + CGFloat(index) * (gaugeSegmentWidth + gaugeSegmentGap),
+                y: gaugeY, width: gaugeSegmentWidth, height: gaugeHeight)
+            let path = NSBezierPath(roundedRect: rect, xRadius: 0.6, yRadius: 0.6)
+            (index < filled ? color.withAlphaComponent(0.9) : color.withAlphaComponent(0.22)).setFill()
+            path.fill()
+        }
+    }
+    drawLine(
+        top, size: topSize, attrs: topAttrs, y: topY,
+        color: topColor ?? (isTemplate ? .black : normalColor), progress: topGauge)
+    drawLine(
+        bottom, size: botSize, attrs: bottomAttrs, y: botY,
+        color: bottomColor ?? (isTemplate ? .black : normalColor), progress: bottomGauge)
     image.unlockFocus()
     image.isTemplate = isTemplate
     return image
@@ -703,12 +751,12 @@ if let idx = CommandLine.arguments.firstIndex(of: "--render") {
     let height = NSStatusBar.system.thickness
     // Use black text (non-template) to check the layout
     let img = renderStacked(
-        top: "5%", bottom: "4%", topColor: .black, bottomColor: .black,
+        top: "Cl 5%", bottom: "Cx 42%", topColor: .black, bottomColor: .black,
         fontSize: num("CLAUDE_USAGE_FONT_SIZE", 9),
         weight: NSFont.Weight(num("CLAUDE_USAGE_FONT_WEIGHT", Double(NSFont.Weight.bold.rawValue))),
         lineGap: num("CLAUDE_USAGE_LINE_GAP", 10),
         yOffset: num("CLAUDE_USAGE_Y_OFFSET", 0),
-        height: height)
+        height: height, topGauge: 0.82, bottomGauge: 0.28)
 
     let scale: CGFloat = 12
     let big = NSImage(size: NSSize(width: img.size.width * scale, height: img.size.height * scale))
@@ -818,6 +866,18 @@ if CommandLine.arguments.contains("--selftest") {
     check(formatRetryIn(3600) == "Retrying in 1h", "formatRetryIn 1h")
     check(formatRetryIn(3900) == "Retrying in 1h 5m", "formatRetryIn 1h 5m")
 
+    // resetProgress: the 5-segment menu-bar gauge uses a clamped 5h countdown.
+    let gaugeNow = Date(timeIntervalSince1970: 1_000_000)
+    check(resetProgress(until: gaugeNow.addingTimeInterval(2.5 * 3600), now: gaugeNow) == 0.5,
+          "resetProgress half of 5h remaining")
+    check(resetProgress(until: gaugeNow.addingTimeInterval(8 * 3600), now: gaugeNow) == 1,
+          "resetProgress clamps dates beyond the window")
+    check(resetProgress(until: gaugeNow.addingTimeInterval(-1), now: gaugeNow) == 0,
+          "resetProgress clamps elapsed resets")
+    let noResetDate: Date? = nil
+    check(resetProgress(until: noResetDate, now: gaugeNow) == nil,
+          "resetProgress preserves an unknown reset")
+
     // Per-provider menu-bar colors: each displayed percentage crosses thresholds independently.
     check(colorForPercent(79) == nil, "usage color below warning threshold")
     check(colorForPercent(80) == .systemOrange, "usage color at warning threshold")
@@ -825,7 +885,7 @@ if CommandLine.arguments.contains("--selftest") {
     let independentImage = renderStacked(
         top: "Cl 81%", bottom: "Cx 20%", topColor: .systemOrange, bottomColor: nil,
         fontSize: 9, weight: .bold, lineGap: 10, yOffset: 0,
-        height: NSStatusBar.system.thickness)
+        height: NSStatusBar.system.thickness, topGauge: 0.8, bottomGauge: 0.2)
     check(!independentImage.isTemplate, "stacked display preserves independent line colors")
 
     // hexEncode: the `add-generic-password -X` payload format (lowercase, zero-padded).
