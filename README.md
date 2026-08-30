@@ -6,6 +6,9 @@ Claude usage comes from the same source as Claude Code's `/usage` command, with 
 
 <img width="430" height="317" alt="Screenshot 2026-08-26 at 13 43 29" src="https://github.com/user-attachments/assets/68538655-f369-4308-8604-6e92ac848f64" />
 
+> **Privacy Notice:** Pulse does not collect, store, or transmit any personal information or usage data. It only reads the credentials required to retrieve usage information and sends them to the corresponding official service endpoints.  
+> No analytics, tracking, or hidden data collection is ever performed.
+
 ## Implementations
 
 | Folder | Surface | Stack | Notes |
