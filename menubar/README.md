@@ -9,7 +9,7 @@ The menu bar shows Claude and Codex usage together in the original Pulse item (t
 ⬡ 20% ▮▮▯▯▯     (Codex, green mark)
 ```
 
-Clicking it opens a dropdown with separate Claude and Codex sections, each headed by the same provider mark and name, with that provider's current model at the right end of the header row (e.g. `Opus (claude-opus-5)`, `GPT-5.6-Terra (gpt-5.6-terra)`). Each section lists its 5-hour and weekly windows with reset times; the Claude section additionally shows weekly per-model limits. A single `Updated:` line below the last section shows the later of the two providers' last successful polls. `Refresh Now` (⌘R) re-polls both providers. When usage is high, the menu-bar text color turns orange (80%+) / red (95%+).
+Clicking it opens a dropdown with separate Claude and Codex sections, each headed by the same provider mark and name, with that provider's current model at the right end of the header row (e.g. `Opus (claude-opus-5)`, `GPT-5.6-Terra (gpt-5.6-terra)`). Each section lists its 5-hour and weekly windows with reset times; the Claude section additionally shows weekly per-model limits. `Refresh Now` (⌘R) re-polls both providers and carries the last-updated clock time next to its label in a smaller, de-emphasized font (the later of the two providers' last successful polls). When usage is high, the menu-bar text color turns orange (80%+) / red (95%+).
 
 > **Menu-bar only** — because of `LSUIElement` / `.accessory`, no Dock icon appears.
 

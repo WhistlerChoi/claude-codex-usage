@@ -585,9 +585,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     /// One section per provider: header (icon + name, current model at the right edge) and
-    /// the aligned usage table (3 columns). A single de-emphasized "Updated:" line follows the
-    /// last section — both providers poll on the same timer, so one timestamp (the later of the
-    /// two) is enough.
+    /// the aligned usage table (3 columns). The last-updated time is not a section line — it
+    /// rides along on "Refresh Now" below, since it belongs to both providers (they poll on the
+    /// same timer) and to the action that changes it.
     private func rebuildMenu(
         claude: ProviderSection, codex: ProviderSection?, updatedAt: Date?, showCodexLogin: Bool = false
     ) {
@@ -612,15 +612,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             menu.addItem(.separator())
             addSection(.codex, codex)
         }
-        if let updatedAt {
-            menu.addItem(makeNoteItem("Updated: \(clockString(updatedAt))"))
-        }
-        appendInteractiveItems(to: menu, showLogin: false, showCodexLogin: showCodexLogin)
+        appendInteractiveItems(
+            to: menu, showLogin: false, showCodexLogin: showCodexLogin, updatedAt: updatedAt)
         statusItem.menu = menu
     }
 
     /// Shared tail: separator + (optional Login) + About / Refresh Now / Quit.
-    private func appendInteractiveItems(to menu: NSMenu, showLogin: Bool, showCodexLogin: Bool) {
+    /// `updatedAt`, when known, is appended to "Refresh Now" in a smaller, de-emphasized font.
+    private func appendInteractiveItems(
+        to menu: NSMenu, showLogin: Bool, showCodexLogin: Bool, updatedAt: Date? = nil
+    ) {
         menu.addItem(.separator())
         if showLogin {
             let loginItem = NSMenuItem(
@@ -639,11 +640,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(aboutItem)
         let refreshItem = NSMenuItem(title: "Refresh Now", action: #selector(refreshAll), keyEquivalent: "r")
         refreshItem.target = self
+        if let updatedAt {
+            refreshItem.attributedTitle = refreshTitle(updatedAt: updatedAt)
+        }
         menu.addItem(refreshItem)
         let quitItem = NSMenuItem(title: "Quit", action: #selector(quit), keyEquivalent: "q")
         quitItem.target = self
         menu.addItem(quitItem)
     }
+}
+
+/// "Refresh Now" followed by the last-updated clock time in a smaller, de-emphasized font.
+/// The time hangs off the action that changes it rather than off either provider's section,
+/// where it would read as belonging to that one provider. The ⌘R key equivalent keeps the
+/// item's right edge, so the time trails the label instead of being right-aligned.
+func refreshTitle(updatedAt: Date) -> NSAttributedString {
+    let menuFont = NSFont.menuFont(ofSize: 0)
+    let title = NSMutableAttributedString(
+        string: "Refresh Now",
+        attributes: [.font: menuFont, .foregroundColor: NSColor.labelColor])
+    title.append(NSAttributedString(
+        string: "   \(clockString(updatedAt))",
+        attributes: [
+            .font: NSFont.monospacedDigitSystemFont(ofSize: menuFont.pointSize - 2, weight: .regular),
+            .foregroundColor: NSColor.secondaryLabelColor,
+        ]))
+    return title
 }
 
 /// De-emphasized, non-interactive info line ("Updated: …", error details).

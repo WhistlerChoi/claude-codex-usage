@@ -23,8 +23,9 @@ rollout log — the `payload.model` of its last `turn_context` record — and ma
 display name via `CODEX_HOME/models_cache.json`. The menu bar identifies the
 two providers with brand-colored vector marks (`ProviderIcon.swift`, fixed colors, drawn in code
 via `NSBezierPath`) rather than text prefixes; the marks are menubar-only and need no mirroring.
-In the dropdown each provider header shows its current model at the right edge, and a single
-`Updated:` line (the later of the two providers' last successful polls) follows the last section.
+In the dropdown each provider header shows its current model at the right edge, and the
+last-updated time (the later of the two providers' last successful polls) rides on the
+`Refresh Now` item in a smaller font rather than sitting under either provider's section.
 
 ## Shared architecture (same 4 modules in every implementation)
 
