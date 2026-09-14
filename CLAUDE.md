@@ -17,7 +17,9 @@ Three front-ends that display Claude Code's **5-hour / weekly usage** (and curre
 `menubar/` also contains `CodexUsageClient.swift`. It reads the Codex access token from
 `CODEX_HOME/auth.json` (or `~/.codex/auth.json`) and displays the current Codex rate-limit
 usage in the existing Pulse menu-bar item. This provider is independent from the Claude
-provider and is not part of the VSCode or tray implementations.
+provider and is not part of the VSCode or tray implementations. The menu bar identifies the
+two providers with brand-colored vector marks (`ProviderIcon.swift`, fixed colors, drawn in code
+via `NSBezierPath`) rather than text prefixes; the marks are menubar-only and need no mirroring.
 
 ## Shared architecture (same 4 modules in every implementation)
 
