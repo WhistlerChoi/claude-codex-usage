@@ -26,6 +26,13 @@ struct UsageRow {
     let reset: String    // already-formatted, e.g. "resets in 4h 26m"
 }
 
+/// One provider's block in the dropdown: the aligned usage table plus de-emphasized
+/// note lines rendered directly under it (e.g. "Current model: …", "Updated: …").
+struct ProviderSection {
+    let rows: [UsageRow]
+    let notes: [String]
+}
+
 enum UsageError: Error, LocalizedError {
     case auth
     case http(Int)

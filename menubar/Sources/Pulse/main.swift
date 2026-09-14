@@ -14,12 +14,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private var lastUsage: UsageData?
     private var lastModel: CurrentModel?
-    private var lastUpdated: Date?
+    private var lastClaudeUpdated: Date?
     private var lastSuccessAt: Date?
     private var consecutiveFailures = 0
     private var inFlight = false
     private var aboutWindow: NSWindow?
     private var lastCodexUsage: CodexUsage?
+    private var lastCodexUpdated: Date?
     private var codexLoginNeeded = false
     private var codexInFlight = false
 
@@ -52,6 +53,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         setStacked(top: "··", bottom: "··", color: nil)
         rebuildMenu(detailLines: ["Loading..."])
 
+        refreshAll()
+    }
+
+    /// "Refresh Now" and launch: poll both providers. Each has its own in-flight guard and timer.
+    @objc func refreshAll() {
         refresh()
         refreshCodex()
     }
@@ -331,9 +337,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func renderCodexUsage(_ usage: CodexUsage) {
         lastCodexUsage = usage
+        lastCodexUpdated = Date()
         codexLoginNeeded = false
-        if let usage = lastUsage {
-            renderUsage(usage, lastModel)
+        if lastUsage != nil {
+            renderAll()
         } else {
             // Codex only (no Claude value yet): 5h on top, weekly below, like the Claude-only layout.
             let color = colorForPercent(usage.fiveHour.usedPercent)
@@ -347,6 +354,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if let weekly = usage.weekly {
                 lines.append("Codex Weekly: \(weekly.usedPercent)% · \(formatResetIn(weekly.resetsAt))")
             }
+            if let at = lastCodexUpdated {
+                lines.append("Updated: \(clockString(at))")
+            }
             rebuildMenu(detailLines: lines)
         }
     }
@@ -354,8 +364,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func handleCodexError(_ error: Error) {
         if case CodexUsageError.credentialsNotFound = error {
             codexLoginNeeded = true
-            if let usage = lastUsage {
-                renderUsage(usage, lastModel)
+            if lastUsage != nil {
+                renderAll()
             } else {
                 setStacked(
                     top: "Login", bottom: "needed", topColor: .systemRed, bottomColor: .systemRed,
@@ -364,16 +374,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         } else if case CodexUsageError.auth = error {
             codexLoginNeeded = true
-            if let usage = lastUsage {
-                renderUsage(usage, lastModel)
+            if lastUsage != nil {
+                renderAll()
             } else {
                 setStacked(
                     top: "Login", bottom: "needed", topColor: .systemRed, bottomColor: .systemRed,
                     topIcon: lineIcon(.codex))
                 rebuildMenu(detailLines: [error.localizedDescription], showCodexLogin: true)
             }
-        } else if let usage = lastUsage {
-            renderUsage(usage, lastModel)
+        } else if lastUsage != nil {
+            renderAll()
         } else {
             rebuildMenu(detailLines: [error.localizedDescription])
         }
@@ -381,10 +391,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Rendering
 
+    /// Store a fresh Claude result and redraw. Only this path moves the Claude timestamp.
     private func renderUsage(_ usage: UsageData, _ model: CurrentModel?) {
         lastUsage = usage
         lastModel = model
-        lastUpdated = Date()
+        lastClaudeUpdated = Date()
+        renderAll()
+    }
+
+    /// Redraw the status item and dropdown from cached state (both providers). Used by the
+    /// Codex paths too, so a Codex-only poll never touches the Claude "Updated" time.
+    private func renderAll() {
+        guard let usage = lastUsage else { return }
+        let model = lastModel
 
         renderPrimaryDisplay()
 
@@ -409,24 +428,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             claudeRows.append(UsageRow(label: "Weekly \(scoped.model)", pct: pct(scoped.window.utilization),
                                  reset: formatResetIn(scoped.window.resetsAt)))
         }
-        var codexRows: [UsageRow] = []
+        var claudeNotes: [String] = []
+        if let model = model {
+            claudeNotes.append("Current model: \(model.name) (\(model.id))")
+        }
+        if let at = lastClaudeUpdated {
+            claudeNotes.append("Updated: \(clockString(at))")
+        }
+
+        var codexSection: ProviderSection?
         if let codex = lastCodexUsage {
-            codexRows.append(UsageRow(label: "5h", pct: codex.fiveHour.usedPercent,
-                                      reset: formatResetIn(codex.fiveHour.resetsAt)))
+            var codexRows = [
+                UsageRow(label: "5h", pct: codex.fiveHour.usedPercent,
+                         reset: formatResetIn(codex.fiveHour.resetsAt))
+            ]
             if let weekly = codex.weekly {
                 codexRows.append(UsageRow(label: "Weekly", pct: weekly.usedPercent,
                                           reset: formatResetIn(weekly.resetsAt)))
             }
+            var codexNotes: [String] = []
+            if let at = lastCodexUpdated {
+                codexNotes.append("Updated: \(clockString(at))")
+            }
+            codexSection = ProviderSection(rows: codexRows, notes: codexNotes)
         }
-
-        var footer: [String] = []
-        if let model = model {
-            footer.append("Current model: \(model.name) (\(model.id))")
-        }
-        footer.append("Updated: \(clockString(lastUpdated!))")
 
         rebuildMenu(
-            claudeRows: claudeRows, codexRows: codexRows, footerLines: footer,
+            claude: ProviderSection(rows: claudeRows, notes: claudeNotes),
+            codex: codexSection,
             showCodexLogin: codexLoginNeeded)
     }
 
@@ -563,42 +592,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem.menu = menu
     }
 
-    /// Aligned usage table (3 columns) plus a de-emphasized footer (model / updated).
+    /// One section per provider: header, aligned usage table (3 columns), then that
+    /// provider's de-emphasized note lines (model / updated).
     private func rebuildMenu(
-        claudeRows: [UsageRow], codexRows: [UsageRow], footerLines: [String],
-        showCodexLogin: Bool = false
+        claude: ProviderSection, codex: ProviderSection?, showCodexLogin: Bool = false
     ) {
         let menu = NSMenu()
         menu.autoenablesItems = false
 
-        func addUsageTable(_ provider: Provider, _ rows: [UsageRow]) {
+        func addSection(_ provider: Provider, _ section: ProviderSection) {
             menu.addItem(makeProviderHeaderItem(provider))
             let tableItem = NSMenuItem()
             tableItem.isEnabled = true
-            tableItem.view = makeUsageTableView(rows: rows)
+            tableItem.view = makeUsageTableView(rows: section.rows)
             menu.addItem(tableItem)
-        }
-
-        addUsageTable(.claude, claudeRows)
-        if !codexRows.isEmpty {
-            menu.addItem(.separator())
-            addUsageTable(.codex, codexRows)
-        }
-
-        if !footerLines.isEmpty {
-            menu.addItem(.separator())
-            for line in footerLines {
-                let item = NSMenuItem(title: line, action: nil, keyEquivalent: "")
-                item.isEnabled = true
-                item.attributedTitle = NSAttributedString(
-                    string: line,
-                    attributes: [
-                        .font: NSFont.menuFont(ofSize: 0),
-                        .foregroundColor: NSColor.secondaryLabelColor,
-                    ]
-                )
-                menu.addItem(item)
+            for line in section.notes {
+                menu.addItem(makeNoteItem(line))
             }
+        }
+
+        addSection(.claude, claude)
+        if let codex {
+            menu.addItem(.separator())
+            addSection(.codex, codex)
         }
         appendInteractiveItems(to: menu, showLogin: false, showCodexLogin: showCodexLogin)
         statusItem.menu = menu
@@ -622,7 +638,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let aboutItem = NSMenuItem(title: "About", action: #selector(showAbout), keyEquivalent: "")
         aboutItem.target = self
         menu.addItem(aboutItem)
-        let refreshItem = NSMenuItem(title: "Refresh Now", action: #selector(refresh), keyEquivalent: "r")
+        let refreshItem = NSMenuItem(title: "Refresh Now", action: #selector(refreshAll), keyEquivalent: "r")
         refreshItem.target = self
         menu.addItem(refreshItem)
         let quitItem = NSMenuItem(title: "Quit", action: #selector(quit), keyEquivalent: "q")
@@ -631,7 +647,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
-/// Section header for one provider's usage table: brand icon + name, de-emphasized like the footer.
+/// De-emphasized, non-interactive info line under a provider's table ("Current model: …", "Updated: …").
+func makeNoteItem(_ line: String) -> NSMenuItem {
+    let item = NSMenuItem(title: line, action: nil, keyEquivalent: "")
+    item.isEnabled = true
+    item.attributedTitle = NSAttributedString(
+        string: line,
+        attributes: [
+            .font: NSFont.menuFont(ofSize: 0),
+            .foregroundColor: NSColor.secondaryLabelColor,
+        ]
+    )
+    return item
+}
+
+/// Section header for one provider's usage table: brand icon + name, de-emphasized like the notes.
 func makeProviderHeaderItem(_ provider: Provider) -> NSMenuItem {
     let item = NSMenuItem(title: provider.displayName, action: nil, keyEquivalent: "")
     item.isEnabled = true
