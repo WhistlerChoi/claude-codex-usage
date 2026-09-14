@@ -1,12 +1,12 @@
 # Pulse — Tray App (Go, lightweight)
 
-A **native Go** app that shows Claude Code usage in the system tray.
+A **native Go** app that shows Claude Code and Codex usage in the system tray.
 **Single exe ~7MB**, no runtime dependencies.
 
 ## What it shows
 
-- **Icon**: a colored badge with the 5-hour usage number (`42`) — blue (normal) / orange (80%+) / red (95%+)
-- **Hover tooltip**: 5-hour, weekly, Opus/Sonnet, current model, time until reset
+- **Icon**: a colored badge with Claude's 5-hour usage number (`42`) — blue (normal) / orange (80%+) / red (95%+). If Claude is unavailable, it shows Codex's 5-hour usage instead.
+- **Hover tooltip / right-click menu**: separate Claude and Codex sections with 5-hour, weekly, per-model Claude limits, current model, and time until reset
 - **Right-click menu**: details + `Refresh Now` / `Quit`
 
 ## How it works
@@ -14,6 +14,7 @@ A **native Go** app that shows Claude Code usage in the system tray.
 - Usage: `https://api.anthropic.com/api/oauth/usage`
 - Token: `~/.claude/.credentials.json` (Windows: `%USERPROFILE%\.claude\.credentials.json`); on macOS, fall back to the keychain if absent
 - Current model: the last `message.model` from the most recent transcript among `~/.claude/projects/**/*.jsonl`
+- Codex usage: `https://chatgpt.com/backend-api/wham/usage`, using the access token in `CODEX_HOME/auth.json` (or `~/.codex/auth.json`). Its current model comes from the newest `CODEX_HOME/sessions/**/*.jsonl` rollout log and is named through `models_cache.json` when available.
 
 ## Build
 
