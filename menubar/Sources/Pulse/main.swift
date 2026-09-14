@@ -600,11 +600,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let menu = NSMenu()
         menu.autoenablesItems = false
 
+        // One measurement over every row of both providers: each section's table is its own
+        // NSGridView, so without a shared width their columns would be sized independently
+        // and the reset column would start at a different x in each section.
+        let widths = usageTableColumnWidths(sections: [claude.rows, codex?.rows ?? []])
+
         func addSection(_ provider: Provider, _ section: ProviderSection) {
             menu.addItem(makeProviderHeaderItem(provider))
             let tableItem = NSMenuItem()
             tableItem.isEnabled = true
-            tableItem.view = makeUsageTableView(rows: section.rows)
+            tableItem.view = makeUsageTableView(rows: section.rows, columnWidths: widths)
             menu.addItem(tableItem)
             for line in section.notes {
                 menu.addItem(makeNoteItem(line))
@@ -676,19 +681,47 @@ func makeProviderHeaderItem(_ provider: Provider) -> NSMenuItem {
     return item
 }
 
+/// The two fonts a usage table is drawn with. Built in one place so measuring
+/// (`usageTableColumnWidths`) and rendering (`makeUsageTableView`) can never drift apart.
+func usageTableFonts() -> (menu: NSFont, digit: NSFont) {
+    let menu = NSFont.menuFont(ofSize: 0)
+    return (menu, NSFont.monospacedDigitSystemFont(ofSize: menu.pointSize, weight: .regular))
+}
+
+/// Width of the widest label cell and the widest percent cell across *all* rows of *all*
+/// provider sections. Both usage tables must be built with these widths or their columns
+/// disagree: NSGridView sizes each column to the widest cell in that grid alone, so
+/// Claude's ("Weekly Fable", "43%") and Codex's ("Weekly", "0%") end up different widths
+/// and the reset column starts at a different x in each section.
+func usageTableColumnWidths(sections: [[UsageRow]]) -> (label: CGFloat, pct: CGFloat) {
+    let fonts = usageTableFonts()
+    var label: CGFloat = 0
+    var pct: CGFloat = 0
+    for rows in sections {
+        for row in rows {
+            label = max(label, (row.label as NSString).size(withAttributes: [.font: fonts.menu]).width)
+            pct = max(pct, ("\(row.pct)%" as NSString).size(withAttributes: [.font: fonts.digit]).width)
+        }
+    }
+    return (ceil(label), ceil(pct))
+}
+
 /// Build a non-interactive view hosting an aligned 3-column usage table
 /// (label | percent right-aligned | reset). Sized to its intrinsic content so the
 /// menu item adopts the table's width. A free function so the offscreen render path
 /// can build it without an AppDelegate.
-func makeUsageTableView(rows: [UsageRow]) -> NSView {
+///
+/// Pass `columnWidths` (from `usageTableColumnWidths` over every section's rows) so the
+/// label and percent columns match across provider sections; `nil` keeps each table
+/// self-sizing.
+func makeUsageTableView(rows: [UsageRow], columnWidths: (label: CGFloat, pct: CGFloat)? = nil) -> NSView {
     // Match the standard menu item insets so the table lines up with the items
     // below the separator. `leading` ~= the menu's text gutter (checkmark + gap).
     let leading: CGFloat = 21
     let trailing: CGFloat = 14
     let vPad: CGFloat = 5
 
-    let menuFont = NSFont.menuFont(ofSize: 0)
-    let digitFont = NSFont.monospacedDigitSystemFont(ofSize: menuFont.pointSize, weight: .regular)
+    let (menuFont, digitFont) = usageTableFonts()
 
     func cell(_ s: String, font: NSFont, color: NSColor, align: NSTextAlignment = .left) -> NSTextField {
         let t = NSTextField(labelWithString: s)
@@ -714,13 +747,27 @@ func makeUsageTableView(rows: [UsageRow]) -> NSView {
     grid.column(at: 0).xPlacement = NSGridCell.Placement.leading
     grid.column(at: 1).xPlacement = NSGridCell.Placement.trailing  // line up the % signs
     grid.column(at: 2).xPlacement = NSGridCell.Placement.leading
+    if let w = columnWidths {
+        // Fixed, not minimum — but measured from these very rows, so never narrower
+        // than the widest cell. The reset column stays auto-sized; pinning columns 0
+        // and 1 already puts its left edge at the same x in every section.
+        grid.column(at: 0).width = w.label
+        grid.column(at: 1).width = w.pct
+    }
 
     let container = NSView()
     container.translatesAutoresizingMaskIntoConstraints = false
     container.addSubview(grid)
+    // Hug the grid's intrinsic width rather than pinning trailing outright: `fittingSize`
+    // still resolves to the intrinsic width, but a menu made wider by a longer item below
+    // can no longer hand the slack to the last column.
+    let trailingHug = container.trailingAnchor.constraint(
+        equalTo: grid.trailingAnchor, constant: trailing)
+    trailingHug.priority = .defaultLow
     NSLayoutConstraint.activate([
         grid.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: leading),
-        grid.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -trailing),
+        container.trailingAnchor.constraint(greaterThanOrEqualTo: grid.trailingAnchor, constant: trailing),
+        trailingHug,
         grid.topAnchor.constraint(equalTo: container.topAnchor, constant: vPad),
         grid.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -vPad),
     ])
@@ -1169,16 +1216,34 @@ if let idx = CommandLine.arguments.firstIndex(of: "--about") {
 if let idx = CommandLine.arguments.firstIndex(of: "--menu") {
     let outPath = CommandLine.arguments.indices.contains(idx + 1)
         ? CommandLine.arguments[idx + 1] : NSTemporaryDirectory() + "menu.png"
-    let rows = [
+    // Two sections, as the real menu builds them — a wide-label/3-digit Claude block over a
+    // narrow-label/1-digit Codex block. That is the case that used to misalign, so this render
+    // is a genuine regression check: the two blocks' `%` right edge and `· resets in` left edge
+    // must land at the same x.
+    let claudeRows = [
         UsageRow(label: "5h", pct: 3, reset: "resets in 2h 13m"),
         UsageRow(label: "Weekly", pct: 27, reset: "resets in 4d 6h"),
         UsageRow(label: "Weekly Opus", pct: 100, reset: "resets in 4d 6h"),
         UsageRow(label: "Weekly Sonnet", pct: 8, reset: "resets in 16h 16m"),
         UsageRow(label: "Weekly Fable", pct: 12, reset: "resets in 4d 6h"),
-        UsageRow(label: "Codex 5h", pct: 20, reset: "resets in 3h 1m"),
-        UsageRow(label: "Codex Weekly", pct: 48, reset: "resets in 5d 2h"),
     ]
-    let view = makeUsageTableView(rows: rows)
+    let codexRows = [
+        UsageRow(label: "5h", pct: 0, reset: "resets in 3h 1m"),
+        UsageRow(label: "Weekly", pct: 48, reset: "resets in 5d 2h"),
+    ]
+    let widths = usageTableColumnWidths(sections: [claudeRows, codexRows])
+    let claudeTable = makeUsageTableView(rows: claudeRows, columnWidths: widths)
+    let codexTable = makeUsageTableView(rows: codexRows, columnWidths: widths)
+
+    // Stack the two tables at the same origin x, as the menu does.
+    let view = NSView(frame: NSRect(
+        x: 0, y: 0,
+        width: max(claudeTable.frame.width, codexTable.frame.width),
+        height: claudeTable.frame.height + codexTable.frame.height))
+    codexTable.setFrameOrigin(.zero)
+    claudeTable.setFrameOrigin(NSPoint(x: 0, y: codexTable.frame.height))
+    view.addSubview(claudeTable)
+    view.addSubview(codexTable)
     view.wantsLayer = true
     view.layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
     view.layoutSubtreeIfNeeded()
