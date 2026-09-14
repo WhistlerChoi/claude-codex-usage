@@ -9,7 +9,7 @@ The menu bar shows Claude and Codex usage together in the original Pulse item (t
 ⬡ 20% ▮▮▯▯▯     (Codex, green mark)
 ```
 
-Clicking it opens a dropdown with separate Claude and Codex sections, each headed by the same provider mark and name. The Codex section shows both its 5-hour and weekly windows; the dropdown also includes reset times, weekly Claude model limits, the current Claude model, and the last update, plus `Refresh Now` / `Quit`. When usage is high, the menu-bar text color turns orange (80%+) / red (95%+).
+Clicking it opens a dropdown with separate Claude and Codex sections, each headed by the same provider mark and name. Each section lists its 5-hour and weekly windows with reset times and ends with its own `Updated:` time, because the two providers are polled independently. The Claude section additionally shows weekly per-model limits and the current Claude model. `Refresh Now` (⌘R) re-polls both providers. When usage is high, the menu-bar text color turns orange (80%+) / red (95%+).
 
 > **Menu-bar only** — because of `LSUIElement` / `.accessory`, no Dock icon appears.
 
