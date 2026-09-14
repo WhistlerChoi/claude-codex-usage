@@ -26,11 +26,11 @@ struct UsageRow {
     let reset: String    // already-formatted, e.g. "resets in 4h 26m"
 }
 
-/// One provider's block in the dropdown: the aligned usage table plus de-emphasized
-/// note lines rendered directly under it (e.g. "Current model: …", "Updated: …").
+/// One provider's block in the dropdown: the header (with the current model, if known)
+/// and the aligned usage table under it.
 struct ProviderSection {
     let rows: [UsageRow]
-    let notes: [String]
+    let model: CurrentModel?   // shown at the right edge of the section header, if known
 }
 
 enum UsageError: Error, LocalizedError {

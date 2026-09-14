@@ -9,7 +9,7 @@ The menu bar shows Claude and Codex usage together in the original Pulse item (t
 ⬡ 20% ▮▮▯▯▯     (Codex, green mark)
 ```
 
-Clicking it opens a dropdown with separate Claude and Codex sections, each headed by the same provider mark and name. Each section lists its 5-hour and weekly windows with reset times and ends with its own `Updated:` time, because the two providers are polled independently. The Claude section additionally shows weekly per-model limits and the current Claude model. `Refresh Now` (⌘R) re-polls both providers. When usage is high, the menu-bar text color turns orange (80%+) / red (95%+).
+Clicking it opens a dropdown with separate Claude and Codex sections, each headed by the same provider mark and name, with that provider's current model at the right end of the header row (e.g. `Opus (claude-opus-5)`, `GPT-5.6-Terra (gpt-5.6-terra)`). Each section lists its 5-hour and weekly windows with reset times; the Claude section additionally shows weekly per-model limits. A single `Updated:` line below the last section shows the later of the two providers' last successful polls. `Refresh Now` (⌘R) re-polls both providers. When usage is high, the menu-bar text color turns orange (80%+) / red (95%+).
 
 > **Menu-bar only** — because of `LSUIElement` / `.accessory`, no Dock icon appears.
 
@@ -24,7 +24,10 @@ It uses the same source as the VSCode extension (ported to Swift):
 Codex usage is fetched independently from `https://chatgpt.com/backend-api/wham/usage`.
 The app reads the Codex access token from `CODEX_HOME/auth.json` or `~/.codex/auth.json`,
 but never uses or writes the refresh token. The Codex endpoint is an internal client
-endpoint and may change with future Codex versions.
+endpoint and may change with future Codex versions. The current Codex model is the `model`
+of the last `turn_context` record in the most recent rollout log under
+`CODEX_HOME/sessions/**/*.jsonl`, named via `CODEX_HOME/models_cache.json` (slug →
+display name); if either is unavailable the header simply omits the model.
 
 ## Build & run
 
@@ -82,7 +85,9 @@ spctl --assess --type execute Pulse.app
   falling back to the `Claude Code-credentials` keychain item) and, to show the current
   model, the local transcripts under `~/.claude/projects/**/*.jsonl` — only the
   `message.model` field is used; conversation content is never displayed or transmitted.
-  For Codex, it reads `CODEX_HOME/auth.json` or `~/.codex/auth.json`.
+  For Codex, it reads `CODEX_HOME/auth.json` or `~/.codex/auth.json` and, for the current
+  model, the rollout logs under `CODEX_HOME/sessions/**/*.jsonl` plus `models_cache.json` —
+  again only the model field is used; nothing from those logs is displayed or transmitted.
 - **Where data goes:** the Claude token is sent only to `https://api.anthropic.com` and
   the Codex token only to `https://chatgpt.com` to fetch usage. Nothing else leaves your
   machine; there is no analytics or telemetry.

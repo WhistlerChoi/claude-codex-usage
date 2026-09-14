@@ -17,9 +17,14 @@ Three front-ends that display Claude Code's **5-hour / weekly usage** (and curre
 `menubar/` also contains `CodexUsageClient.swift`. It reads the Codex access token from
 `CODEX_HOME/auth.json` (or `~/.codex/auth.json`) and displays the current Codex rate-limit
 usage in the existing Pulse menu-bar item. This provider is independent from the Claude
-provider and is not part of the VSCode or tray implementations. The menu bar identifies the
+provider and is not part of the VSCode or tray implementations. `CodexModel.swift` reads the
+current Codex model (best-effort, menubar-only) from the newest `CODEX_HOME/sessions/**/*.jsonl`
+rollout log — the `payload.model` of its last `turn_context` record — and maps the slug to a
+display name via `CODEX_HOME/models_cache.json`. The menu bar identifies the
 two providers with brand-colored vector marks (`ProviderIcon.swift`, fixed colors, drawn in code
 via `NSBezierPath`) rather than text prefixes; the marks are menubar-only and need no mirroring.
+In the dropdown each provider header shows its current model at the right edge, and a single
+`Updated:` line (the later of the two providers' last successful polls) follows the last section.
 
 ## Shared architecture (same 4 modules in every implementation)
 

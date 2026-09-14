@@ -20,6 +20,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var inFlight = false
     private var aboutWindow: NSWindow?
     private var lastCodexUsage: CodexUsage?
+    private var lastCodexModel: CurrentModel?
     private var lastCodexUpdated: Date?
     private var codexLoginNeeded = false
     private var codexInFlight = false
@@ -93,9 +94,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard let self else { return }
             do {
                 let usage = try await fetchCodexUsage()
+                let model = readCurrentCodexModel()
                 await MainActor.run {
                     self.codexInFlight = false
-                    self.renderCodexUsage(usage)
+                    self.renderCodexUsage(usage, model)
                     self.scheduleNextCodex(self.interval)
                 }
             } catch {
@@ -335,8 +337,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return img
     }
 
-    private func renderCodexUsage(_ usage: CodexUsage) {
+    private func renderCodexUsage(_ usage: CodexUsage, _ model: CurrentModel?) {
         lastCodexUsage = usage
+        lastCodexModel = model
         lastCodexUpdated = Date()
         codexLoginNeeded = false
         if lastUsage != nil {
@@ -428,14 +431,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             claudeRows.append(UsageRow(label: "Weekly \(scoped.model)", pct: pct(scoped.window.utilization),
                                  reset: formatResetIn(scoped.window.resetsAt)))
         }
-        var claudeNotes: [String] = []
-        if let model = model {
-            claudeNotes.append("Current model: \(model.name) (\(model.id))")
-        }
-        if let at = lastClaudeUpdated {
-            claudeNotes.append("Updated: \(clockString(at))")
-        }
-
         var codexSection: ProviderSection?
         if let codex = lastCodexUsage {
             var codexRows = [
@@ -446,16 +441,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 codexRows.append(UsageRow(label: "Weekly", pct: weekly.usedPercent,
                                           reset: formatResetIn(weekly.resetsAt)))
             }
-            var codexNotes: [String] = []
-            if let at = lastCodexUpdated {
-                codexNotes.append("Updated: \(clockString(at))")
-            }
-            codexSection = ProviderSection(rows: codexRows, notes: codexNotes)
+            codexSection = ProviderSection(rows: codexRows, model: lastCodexModel)
         }
 
         rebuildMenu(
-            claude: ProviderSection(rows: claudeRows, notes: claudeNotes),
+            claude: ProviderSection(rows: claudeRows, model: model),
             codex: codexSection,
+            updatedAt: latestDate(lastClaudeUpdated, lastCodexUpdated),
             showCodexLogin: codexLoginNeeded)
     }
 
@@ -592,10 +584,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem.menu = menu
     }
 
-    /// One section per provider: header, aligned usage table (3 columns), then that
-    /// provider's de-emphasized note lines (model / updated).
+    /// One section per provider: header (icon + name, current model at the right edge) and
+    /// the aligned usage table (3 columns). A single de-emphasized "Updated:" line follows the
+    /// last section — both providers poll on the same timer, so one timestamp (the later of the
+    /// two) is enough.
     private func rebuildMenu(
-        claude: ProviderSection, codex: ProviderSection?, showCodexLogin: Bool = false
+        claude: ProviderSection, codex: ProviderSection?, updatedAt: Date?, showCodexLogin: Bool = false
     ) {
         let menu = NSMenu()
         menu.autoenablesItems = false
@@ -606,20 +600,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let widths = usageTableColumnWidths(sections: [claude.rows, codex?.rows ?? []])
 
         func addSection(_ provider: Provider, _ section: ProviderSection) {
-            menu.addItem(makeProviderHeaderItem(provider))
+            menu.addItem(makeProviderHeaderItem(provider, model: section.model))
             let tableItem = NSMenuItem()
             tableItem.isEnabled = true
             tableItem.view = makeUsageTableView(rows: section.rows, columnWidths: widths)
             menu.addItem(tableItem)
-            for line in section.notes {
-                menu.addItem(makeNoteItem(line))
-            }
         }
 
         addSection(.claude, claude)
         if let codex {
             menu.addItem(.separator())
             addSection(.codex, codex)
+        }
+        if let updatedAt {
+            menu.addItem(makeNoteItem("Updated: \(clockString(updatedAt))"))
         }
         appendInteractiveItems(to: menu, showLogin: false, showCodexLogin: showCodexLogin)
         statusItem.menu = menu
@@ -652,7 +646,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
-/// De-emphasized, non-interactive info line under a provider's table ("Current model: …", "Updated: …").
+/// De-emphasized, non-interactive info line ("Updated: …", error details).
 func makeNoteItem(_ line: String) -> NSMenuItem {
     let item = NSMenuItem(title: line, action: nil, keyEquivalent: "")
     item.isEnabled = true
@@ -666,19 +660,74 @@ func makeNoteItem(_ line: String) -> NSMenuItem {
     return item
 }
 
-/// Section header for one provider's usage table: brand icon + name, de-emphasized like the notes.
-func makeProviderHeaderItem(_ provider: Provider) -> NSMenuItem {
-    let item = NSMenuItem(title: provider.displayName, action: nil, keyEquivalent: "")
+/// Section header for one provider's usage table, hosted in a custom view so the current
+/// model can sit flush at the right edge: `[icon] Claude …………… Opus (claude-opus-5)`.
+func makeProviderHeaderItem(_ provider: Provider, model: CurrentModel?) -> NSMenuItem {
+    let item = NSMenuItem()
     item.isEnabled = true
-    item.image = provider.icon(pointSize: 14)
-    item.attributedTitle = NSAttributedString(
-        string: provider.displayName,
-        attributes: [
-            .font: NSFont.menuFont(ofSize: 0),
-            .foregroundColor: NSColor.secondaryLabelColor,
-        ]
-    )
+    item.view = makeProviderHeaderView(provider, model: model)
     return item
+}
+
+/// Header row view: brand icon + provider name on the left, `model` (name + id) on the right,
+/// both de-emphasized like the note lines. AppKit stretches a menu item's view to the menu's
+/// width, so the trailing-pinned model label lands at the right edge whichever item is widest.
+/// A free function so the offscreen `--menu` render can build it without an AppDelegate.
+func makeProviderHeaderView(_ provider: Provider, model: CurrentModel?) -> NSView {
+    let leading: CGFloat = 14   // icon sits in the menu's checkmark gutter, like NSMenuItem.image did
+    let trailing: CGFloat = 14  // same right inset as the usage table
+    let vPad: CGFloat = 3
+    let iconSize: CGFloat = 14
+    let font = NSFont.menuFont(ofSize: 0)
+
+    func label(_ s: String) -> NSTextField {
+        let t = NSTextField(labelWithString: s)
+        t.font = font
+        t.textColor = .secondaryLabelColor
+        t.lineBreakMode = .byClipping  // truncating mode under-reports the intrinsic width by a few points
+        t.translatesAutoresizingMaskIntoConstraints = false
+        return t
+    }
+
+    let icon = NSImageView(image: provider.icon(pointSize: iconSize))
+    icon.translatesAutoresizingMaskIntoConstraints = false
+    let name = label(provider.displayName)
+
+    let container = NSView()
+    container.translatesAutoresizingMaskIntoConstraints = false
+    container.addSubview(icon)
+    container.addSubview(name)
+    var constraints = [
+        icon.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: leading),
+        icon.centerYAnchor.constraint(equalTo: container.centerYAnchor),
+        icon.widthAnchor.constraint(equalToConstant: iconSize),
+        icon.heightAnchor.constraint(equalToConstant: iconSize),
+        name.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 7),
+        name.topAnchor.constraint(equalTo: container.topAnchor, constant: vPad),
+        name.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -vPad),
+    ]
+    if let model {
+        let modelLabel = label("\(model.name) (\(model.id))")
+        container.addSubview(modelLabel)
+        constraints += [
+            modelLabel.leadingAnchor.constraint(greaterThanOrEqualTo: name.trailingAnchor, constant: 16),
+            modelLabel.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -trailing),
+            modelLabel.firstBaselineAnchor.constraint(equalTo: name.firstBaselineAnchor),
+        ]
+    } else {
+        constraints.append(
+            container.trailingAnchor.constraint(greaterThanOrEqualTo: name.trailingAnchor, constant: trailing))
+    }
+    NSLayoutConstraint.activate(constraints)
+    // Measure the intrinsic width with Auto Layout, then hand the container over to frame-based
+    // sizing: NSMenu (and the --menu render) widen the item view to the menu width by setting
+    // its frame, and a constraint-sized root view would snap back to its fitting width on the
+    // next layout pass — leaving the model label short of the right edge.
+    let fitting = container.fittingSize
+    container.translatesAutoresizingMaskIntoConstraints = true
+    container.autoresizingMask = [.width]
+    container.frame = NSRect(origin: .zero, size: fitting)
+    return container
 }
 
 /// The two fonts a usage table is drawn with. Built in one place so measuring
@@ -1144,6 +1193,36 @@ if CommandLine.arguments.contains("--selftest") {
         check(false, "parseCodexUsage primary-only response parsed")
     }
 
+    // extractLastCodexModel: last turn_context wins; other record types and junk are skipped.
+    let codexLog = """
+    {"type":"session_meta","payload":{"model_provider":"openai"}}
+    {"type":"turn_context","payload":{"turn_id":"t1","model":"gpt-6-astra"}}
+    {"type":"event_msg","payload":{"type":"thread_settings_applied","thread_settings":{"model":"gpt-5.5"}}}
+    {"type":"turn_context","payload":{"turn_id":"t2","model":"gpt-5.6-terra"}}
+    not json at all
+    {"type":"event_msg","payload":{"type":"task_complete"}}
+
+    """
+    check(extractLastCodexModel(codexLog) == "gpt-5.6-terra", "extractLastCodexModel picks last turn_context model")
+    check(extractLastCodexModel("") == nil, "extractLastCodexModel empty -> nil")
+    check(extractLastCodexModel(#"{"type":"session_meta","payload":{"model":"x"}}"#) == nil,
+          "extractLastCodexModel ignores non-turn_context records")
+
+    // codexModelDisplayName: slug -> display_name via models_cache.json, lenient fallback to slug.
+    let modelsCache = #"{"models":[{"slug":"gpt-5.6-terra","display_name":"GPT-5.6-Terra"},{"slug":"gpt-6-astra","display_name":"GPT-6-Astra"}]}"#
+        .data(using: .utf8)
+    check(codexModelDisplayName("gpt-5.6-terra", cache: modelsCache) == "GPT-5.6-Terra", "codexModelDisplayName maps known slug")
+    check(codexModelDisplayName("gpt-unknown", cache: modelsCache) == "gpt-unknown", "codexModelDisplayName unknown slug -> slug")
+    check(codexModelDisplayName("gpt-6-astra", cache: nil) == "gpt-6-astra", "codexModelDisplayName nil cache -> slug")
+    check(codexModelDisplayName("gpt-6-astra", cache: "garbage".data(using: .utf8)) == "gpt-6-astra",
+          "codexModelDisplayName garbage cache -> slug")
+
+    // latestDate: single "Updated:" line takes the later provider timestamp.
+    let d1 = Date(timeIntervalSince1970: 100), d2 = Date(timeIntervalSince1970: 200)
+    check(latestDate(d1, d2) == d2 && latestDate(d2, d1) == d2, "latestDate picks the later date")
+    check(latestDate(d1, nil) == d1 && latestDate(nil, d2) == d2, "latestDate passes through a lone date")
+    check(latestDate(nil, nil) == nil, "latestDate nil,nil -> nil")
+
     print(failures == 0 ? "ALL PASS" : "\(failures) FAILURE(S)")
     exit(failures == 0 ? 0 : 1)
 }
@@ -1177,12 +1256,14 @@ if CommandLine.arguments.contains("--codex-once") {
     Task {
         do {
             let usage = try await fetchCodexUsage()
+            let model = readCurrentCodexModel()
             print("[codex]")
             print("  5h:     \(usage.fiveHour.usedPercent)% · \(formatResetIn(usage.fiveHour.resetsAt))")
             if let weekly = usage.weekly {
                 print("  Weekly: \(weekly.usedPercent)% · \(formatResetIn(weekly.resetsAt))")
             }
             if let plan = usage.planType { print("  Plan: \(plan)") }
+            if let model = model { print("  Model:  \(model.name) (\(model.id))") }
         } catch {
             print("Error: \(error.localizedDescription)")
         }
@@ -1232,18 +1313,25 @@ if let idx = CommandLine.arguments.firstIndex(of: "--menu") {
         UsageRow(label: "Weekly", pct: 48, reset: "resets in 5d 2h"),
     ]
     let widths = usageTableColumnWidths(sections: [claudeRows, codexRows])
-    let claudeTable = makeUsageTableView(rows: claudeRows, columnWidths: widths)
-    let codexTable = makeUsageTableView(rows: codexRows, columnWidths: widths)
+    // Each provider's header carries its current model at the right edge; the model label
+    // must end at the same x in both headers once the views are stretched to the menu width.
+    let items: [NSView] = [
+        makeProviderHeaderView(.claude, model: CurrentModel(id: "claude-opus-5", name: "Opus")),
+        makeUsageTableView(rows: claudeRows, columnWidths: widths),
+        makeProviderHeaderView(.codex, model: CurrentModel(id: "gpt-5.6-terra", name: "GPT-5.6-Terra")),
+        makeUsageTableView(rows: codexRows, columnWidths: widths),
+    ]
 
-    // Stack the two tables at the same origin x, as the menu does.
+    // Stack top-down at the same origin x and stretch every row to the widest one, as the menu does.
+    let width = items.map { $0.frame.width }.max() ?? 0
     let view = NSView(frame: NSRect(
-        x: 0, y: 0,
-        width: max(claudeTable.frame.width, codexTable.frame.width),
-        height: claudeTable.frame.height + codexTable.frame.height))
-    codexTable.setFrameOrigin(.zero)
-    claudeTable.setFrameOrigin(NSPoint(x: 0, y: codexTable.frame.height))
-    view.addSubview(claudeTable)
-    view.addSubview(codexTable)
+        x: 0, y: 0, width: width, height: items.reduce(0) { $0 + $1.frame.height }))
+    var y = view.frame.height
+    for item in items {
+        y -= item.frame.height
+        item.frame = NSRect(x: 0, y: y, width: width, height: item.frame.height)
+        view.addSubview(item)
+    }
     view.wantsLayer = true
     view.layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
     view.layoutSubtreeIfNeeded()

@@ -125,3 +125,14 @@ func formatRetryIn(_ seconds: TimeInterval) -> String {
 func shouldShowStale(_ age: TimeInterval, _ interval: TimeInterval) -> Bool {
     return age >= interval * 3
 }
+
+/// The later of two optional dates (nil only when both are nil). The dropdown shows one
+/// "Updated:" line for both providers, so it takes whichever poll succeeded most recently.
+func latestDate(_ a: Date?, _ b: Date?) -> Date? {
+    switch (a, b) {
+    case let (a?, b?): return max(a, b)
+    case let (a?, nil): return a
+    case let (nil, b?): return b
+    default: return nil
+    }
+}
