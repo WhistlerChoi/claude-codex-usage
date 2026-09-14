@@ -335,9 +335,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let usage = lastUsage {
             renderUsage(usage, lastModel)
         } else {
+            // Codex only (no Claude value yet): 5h on top, weekly below, like the Claude-only layout.
+            let color = colorForPercent(usage.fiveHour.usedPercent)
             setStacked(
-                top: "Cx", bottom: "\(usage.fiveHour.usedPercent)%",
-                color: colorForPercent(usage.fiveHour.usedPercent))
+                top: "\(usage.fiveHour.usedPercent)%",
+                bottom: usage.weekly.map { "\($0.usedPercent)%" } ?? "··",
+                topColor: color, bottomColor: color, topIcon: lineIcon(.codex))
             var lines = [
                 "Codex 5h: \(usage.fiveHour.usedPercent)% · \(formatResetIn(usage.fiveHour.resetsAt))"
             ]
@@ -354,7 +357,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if let usage = lastUsage {
                 renderUsage(usage, lastModel)
             } else {
-                setStacked(top: "Cx", bottom: "Login", color: .systemRed)
+                setStacked(
+                    top: "Login", bottom: "needed", topColor: .systemRed, bottomColor: .systemRed,
+                    topIcon: lineIcon(.codex))
                 rebuildMenu(detailLines: [error.localizedDescription], showCodexLogin: true)
             }
         } else if case CodexUsageError.auth = error {
@@ -362,7 +367,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if let usage = lastUsage {
                 renderUsage(usage, lastModel)
             } else {
-                setStacked(top: "Cx", bottom: "Login", color: .systemRed)
+                setStacked(
+                    top: "Login", bottom: "needed", topColor: .systemRed, bottomColor: .systemRed,
+                    topIcon: lineIcon(.codex))
                 rebuildMenu(detailLines: [error.localizedDescription], showCodexLogin: true)
             }
         } else if let usage = lastUsage {
@@ -404,10 +411,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         var codexRows: [UsageRow] = []
         if let codex = lastCodexUsage {
-            codexRows.append(UsageRow(label: "Codex 5h", pct: codex.fiveHour.usedPercent,
+            codexRows.append(UsageRow(label: "5h", pct: codex.fiveHour.usedPercent,
                                       reset: formatResetIn(codex.fiveHour.resetsAt)))
             if let weekly = codex.weekly {
-                codexRows.append(UsageRow(label: "Codex Weekly", pct: weekly.usedPercent,
+                codexRows.append(UsageRow(label: "Weekly", pct: weekly.usedPercent,
                                           reset: formatResetIn(weekly.resetsAt)))
             }
         }
@@ -431,12 +438,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let codex = lastCodexUsage {
             let claudePercent = pct(usage.fiveHour.utilization)
             setStacked(
-                top: "Cl \(claudePercent)%",
-                bottom: "Cx \(codex.fiveHour.usedPercent)%",
+                top: "\(claudePercent)%",
+                bottom: "\(codex.fiveHour.usedPercent)%",
                 topColor: colorForPercent(claudePercent),
                 bottomColor: colorForPercent(codex.fiveHour.usedPercent),
                 topGauge: resetProgress(until: usage.fiveHour.resetsAt),
-                bottomGauge: resetProgress(until: codex.fiveHour.resetsAt))
+                bottomGauge: resetProgress(until: codex.fiveHour.resetsAt),
+                topIcon: lineIcon(.claude), bottomIcon: lineIcon(.codex))
             statusItem.button?.toolTip = [
                 "Claude 5h: \(formatResetIn(usage.fiveHour.resetsAt))",
                 "Codex 5h: \(formatResetIn(codex.fiveHour.resetsAt))",
@@ -504,7 +512,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func setStacked(
         top: String, bottom: String, topColor: NSColor?, bottomColor: NSColor?,
-        topGauge: Double? = nil, bottomGauge: Double? = nil
+        topGauge: Double? = nil, bottomGauge: Double? = nil,
+        topIcon: NSImage? = nil, bottomIcon: NSImage? = nil
     ) {
         guard let button = statusItem.button else { return }
         button.title = ""
@@ -512,19 +521,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         button.effectiveAppearance.performAsCurrentDrawingAppearance {
             button.image = renderStackedImage(
                 top: top, bottom: bottom, topColor: topColor, bottomColor: bottomColor,
-                normalColor: .labelColor, topGauge: topGauge, bottomGauge: bottomGauge)
+                normalColor: .labelColor, topGauge: topGauge, bottomGauge: bottomGauge,
+                topIcon: topIcon, bottomIcon: bottomIcon)
         }
     }
 
     private func renderStackedImage(
         top: String, bottom: String, topColor: NSColor?, bottomColor: NSColor?,
-        normalColor: NSColor, topGauge: Double? = nil, bottomGauge: Double? = nil
+        normalColor: NSColor, topGauge: Double? = nil, bottomGauge: Double? = nil,
+        topIcon: NSImage? = nil, bottomIcon: NSImage? = nil
     ) -> NSImage {
         renderStacked(
             top: top, bottom: bottom, topColor: topColor, bottomColor: bottomColor,
             fontSize: fontSize, weight: fontWeight, lineGap: lineGap, yOffset: yOffset,
             height: NSStatusBar.system.thickness, normalColor: normalColor,
-            topGauge: topGauge, bottomGauge: bottomGauge)
+            topGauge: topGauge, bottomGauge: bottomGauge, topIcon: topIcon, bottomIcon: bottomIcon)
+    }
+
+    /// Provider icon sized for the menu-bar lines (matches renderStacked's icon box).
+    private func lineIcon(_ provider: Provider) -> NSImage {
+        provider.icon(pointSize: providerIconSize(fontSize: fontSize))
     }
 
     /// Plain text rows (used by the error / auth / "Loading..." paths). Not column-aligned.
@@ -555,17 +571,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let menu = NSMenu()
         menu.autoenablesItems = false
 
-        func addUsageTable(_ rows: [UsageRow]) {
+        func addUsageTable(_ provider: Provider, _ rows: [UsageRow]) {
+            menu.addItem(makeProviderHeaderItem(provider))
             let tableItem = NSMenuItem()
             tableItem.isEnabled = true
             tableItem.view = makeUsageTableView(rows: rows)
             menu.addItem(tableItem)
         }
 
-        addUsageTable(claudeRows)
+        addUsageTable(.claude, claudeRows)
         if !codexRows.isEmpty {
             menu.addItem(.separator())
-            addUsageTable(codexRows)
+            addUsageTable(.codex, codexRows)
         }
 
         if !footerLines.isEmpty {
@@ -612,6 +629,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         quitItem.target = self
         menu.addItem(quitItem)
     }
+}
+
+/// Section header for one provider's usage table: brand icon + name, de-emphasized like the footer.
+func makeProviderHeaderItem(_ provider: Provider) -> NSMenuItem {
+    let item = NSMenuItem(title: provider.displayName, action: nil, keyEquivalent: "")
+    item.isEnabled = true
+    item.image = provider.icon(pointSize: 14)
+    item.attributedTitle = NSAttributedString(
+        string: provider.displayName,
+        attributes: [
+            .font: NSFont.menuFont(ofSize: 0),
+            .foregroundColor: NSColor.secondaryLabelColor,
+        ]
+    )
+    return item
 }
 
 /// Build a non-interactive view hosting an aligned 3-column usage table
@@ -666,14 +698,20 @@ func makeUsageTableView(rows: [UsageRow]) -> NSView {
     return container
 }
 
+/// Side of the square provider icon drawn next to a menu-bar line of `fontSize` text.
+/// Matches the font size so two stacked icons never touch at the default 10pt line gap.
+func providerIconSize(fontSize: CGFloat) -> CGFloat { ceil(fontSize) }
+
 /// Render two stacked lines into an image sized to height (the menu-bar height).
 func renderStacked(
     top: String, bottom: String, topColor: NSColor?, bottomColor: NSColor?,
     fontSize: CGFloat, weight: NSFont.Weight, lineGap: CGFloat, yOffset: CGFloat, height: CGFloat,
-    normalColor: NSColor = .labelColor, topGauge: Double? = nil, bottomGauge: Double? = nil
+    normalColor: NSColor = .labelColor, topGauge: Double? = nil, bottomGauge: Double? = nil,
+    topIcon: NSImage? = nil, bottomIcon: NSImage? = nil
 ) -> NSImage {
     let font = NSFont.monospacedDigitSystemFont(ofSize: fontSize, weight: weight)
-    let isTemplate = topColor == nil && bottomColor == nil
+    // A brand-colored provider icon can never be part of a template (monochrome) image.
+    let isTemplate = topColor == nil && bottomColor == nil && topIcon == nil && bottomIcon == nil
     let topAttrs: [NSAttributedString.Key: Any] = [
         .font: font,
         .foregroundColor: topColor ?? (isTemplate ? NSColor.black : normalColor),
@@ -691,11 +729,16 @@ func renderStacked(
     let gaugeWidth = CGFloat(gaugeSegments) * gaugeSegmentWidth
         + CGFloat(gaugeSegments - 1) * gaugeSegmentGap
     let gaugeSpacing: CGFloat = 3
-    func lineWidth(_ textWidth: CGFloat, _ progress: Double?) -> CGFloat {
+    // Provider icon drawn left of the text, sized to the line's cap height.
+    let iconSize = providerIconSize(fontSize: fontSize)
+    let iconSpacing: CGFloat = 3
+    func lineWidth(_ textWidth: CGFloat, _ progress: Double?, _ icon: NSImage?) -> CGFloat {
         textWidth + (progress == nil ? 0 : gaugeSpacing + gaugeWidth)
+            + (icon == nil ? 0 : iconSize + iconSpacing)
     }
-    let topWidth = lineWidth(topSize.width, topGauge)
-    let botWidth = lineWidth(botSize.width, bottomGauge)
+    let hasIcons = topIcon != nil || bottomIcon != nil
+    let topWidth = lineWidth(topSize.width, topGauge, topIcon)
+    let botWidth = lineWidth(botSize.width, bottomGauge, bottomIcon)
     let width = ceil(max(topWidth, botWidth)) + 2
 
     let image = NSImage(size: NSSize(width: width, height: height))
@@ -705,10 +748,19 @@ func renderStacked(
     let botY = centerY - lineGap / 2 - botSize.height / 2
     func drawLine(
         _ text: String, size: NSSize, attrs: [NSAttributedString.Key: Any], y: CGFloat,
-        color: NSColor, progress: Double?
+        color: NSColor, progress: Double?, icon: NSImage?
     ) {
-        let contentWidth = lineWidth(size.width, progress)
-        let x = (width - contentWidth) / 2
+        let contentWidth = lineWidth(size.width, progress, icon)
+        // Icon lines are left-aligned so the two provider marks form a column; text-only
+        // lines keep the centered look.
+        var x = hasIcons ? 1 : (width - contentWidth) / 2
+        if let icon {
+            // Center the mark on the digits' cap height rather than the full line box.
+            let capCenter = y - font.descender + font.capHeight / 2
+            let iconRect = NSRect(x: x, y: capCenter - iconSize / 2, width: iconSize, height: iconSize)
+            icon.draw(in: iconRect, from: .zero, operation: .sourceOver, fraction: 1)
+            x += iconSize + iconSpacing
+        }
         (text as NSString).draw(at: NSPoint(x: x, y: y), withAttributes: attrs)
         guard let progress else { return }
 
@@ -730,10 +782,11 @@ func renderStacked(
     }
     drawLine(
         top, size: topSize, attrs: topAttrs, y: topY,
-        color: topColor ?? (isTemplate ? .black : normalColor), progress: topGauge)
+        color: topColor ?? (isTemplate ? .black : normalColor), progress: topGauge, icon: topIcon)
     drawLine(
         bottom, size: botSize, attrs: bottomAttrs, y: botY,
-        color: bottomColor ?? (isTemplate ? .black : normalColor), progress: bottomGauge)
+        color: bottomColor ?? (isTemplate ? .black : normalColor), progress: bottomGauge,
+        icon: bottomIcon)
     image.unlockFocus()
     image.isTemplate = isTemplate
     return image
@@ -751,12 +804,14 @@ if let idx = CommandLine.arguments.firstIndex(of: "--render") {
     let height = NSStatusBar.system.thickness
     // Use black text (non-template) to check the layout
     let img = renderStacked(
-        top: "Cl 5%", bottom: "Cx 42%", topColor: .black, bottomColor: .black,
+        top: "5%", bottom: "42%", topColor: .black, bottomColor: .black,
         fontSize: num("CLAUDE_USAGE_FONT_SIZE", 9),
         weight: NSFont.Weight(num("CLAUDE_USAGE_FONT_WEIGHT", Double(NSFont.Weight.bold.rawValue))),
         lineGap: num("CLAUDE_USAGE_LINE_GAP", 10),
         yOffset: num("CLAUDE_USAGE_Y_OFFSET", 0),
-        height: height, topGauge: 0.82, bottomGauge: 0.28)
+        height: height, topGauge: 0.82, bottomGauge: 0.28,
+        topIcon: Provider.claude.icon(pointSize: providerIconSize(fontSize: num("CLAUDE_USAGE_FONT_SIZE", 9))),
+        bottomIcon: Provider.codex.icon(pointSize: providerIconSize(fontSize: num("CLAUDE_USAGE_FONT_SIZE", 9))))
 
     let scale: CGFloat = 12
     let big = NSImage(size: NSSize(width: img.size.width * scale, height: img.size.height * scale))
@@ -887,6 +942,23 @@ if CommandLine.arguments.contains("--selftest") {
         fontSize: 9, weight: .bold, lineGap: 10, yOffset: 0,
         height: NSStatusBar.system.thickness, topGauge: 0.8, bottomGauge: 0.2)
     check(!independentImage.isTemplate, "stacked display preserves independent line colors")
+
+    // Provider icons: brand-colored marks replace the "Cl"/"Cx" text prefixes.
+    let claudeIcon = Provider.claude.icon(pointSize: 10)
+    let codexIcon = Provider.codex.icon(pointSize: 10)
+    check(claudeIcon.size == NSSize(width: 10, height: 10), "Claude icon is square at the requested size")
+    check(!claudeIcon.isTemplate && !codexIcon.isTemplate, "provider icons are colored, not template")
+    check(Provider.claude.brandColor != Provider.codex.brandColor, "provider brand colors differ")
+    let plainImage = renderStacked(
+        top: "5%", bottom: "42%", topColor: nil, bottomColor: nil,
+        fontSize: 9, weight: .bold, lineGap: 10, yOffset: 0, height: NSStatusBar.system.thickness)
+    let iconImage = renderStacked(
+        top: "5%", bottom: "42%", topColor: nil, bottomColor: nil,
+        fontSize: 9, weight: .bold, lineGap: 10, yOffset: 0, height: NSStatusBar.system.thickness,
+        topIcon: claudeIcon, bottomIcon: codexIcon)
+    check(plainImage.isTemplate, "stacked display without colors or icons stays a template image")
+    check(!iconImage.isTemplate, "stacked display with provider icons is never a template image")
+    check(iconImage.size.width > plainImage.size.width, "provider icons widen the stacked display")
 
     // hexEncode: the `add-generic-password -X` payload format (lowercase, zero-padded).
     check(hexEncode(Data()) == "", "hexEncode empty")

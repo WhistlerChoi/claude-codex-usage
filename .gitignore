@@ -11,6 +11,7 @@ tray-go/pulse-tray
 # Swift 메뉴바 (menubar/) 산출물
 menubar/.build/
 menubar/*.app
+menubar/*.dmg
 
 # 로컬 Claude Code 설정 (사용자별)
 .claude/settings.local.json
