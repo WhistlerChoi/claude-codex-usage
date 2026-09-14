@@ -15,11 +15,11 @@ Claude usage comes from the same source as Claude Code's `/usage` command, with 
 | Folder | Surface | Stack | Notes |
 | --- | --- | --- | --- |
 | [`src/`](src/) | VSCode status bar | TypeScript + esbuild | Canonical core (documented below) |
-| [`tray-go/`](tray-go/) | Windows/macOS tray (lightweight) | Go (`systray`) | Single ~7MB exe, no dependencies |
+| [`tray-go/`](tray-go/) | Windows/macOS tray (lightweight) | Go (`systray`) | Claude + Codex, single ~7MB exe |
 | [`menubar/`](menubar/) | macOS menu bar | Swift / AppKit | Claude + Codex, menu-bar only (no Dock icon) |
 
 `src/` is the reference implementation; `tray-go` and `menubar` are hand-ports of the same design in each language.
-The Codex integration is currently implemented in `menubar/` only and is kept independent from the Claude usage provider.
+The macOS menu bar and Windows tray both show Codex alongside Claude; the Codex provider remains independent from the Claude usage provider.
 For platform-specific build, distribution, and troubleshooting instructions, see the README in each folder.
 
 ---

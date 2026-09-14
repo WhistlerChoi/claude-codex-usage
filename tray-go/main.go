@@ -17,7 +17,10 @@ var (
 	mRefresh, mQuit     *systray.MenuItem
 	lastUsage           *usageResp
 	lastModel           *currentModel
+	lastCodexUsage      *codexUsage
+	lastCodexModel      *currentModel
 	lastSuccessAt       time.Time
+	lastCodexSuccessAt  time.Time
 	consecutiveFailures int
 	manualRefresh       = make(chan struct{}, 1)
 )
@@ -29,10 +32,8 @@ const (
 	colorError  = "#777777"
 )
 
-// maxDetailItems: hidden menu items pre-created at startup (systray cannot add items later).
-// Worst case: stale banner + 5h + Weekly + legacy Opus/Sonnet + N scoped weekly + model.
-// 10 covers 4 scoped models; beyond that only the menu truncates — the tooltip stays complete.
-const maxDetailItems = 10
+// systray cannot add items later. This covers both providers plus up to four Claude scoped limits.
+const maxDetailItems = 18
 
 func main() {
 	// --render [out.png]: save the icon image as a PNG and exit (for verification)
@@ -106,35 +107,57 @@ func pollLoop() {
 }
 
 func refresh(interval time.Duration) time.Duration {
-	usage, err := fetchUsage()
-	if err != nil {
-		if errors.Is(err, errAuth) || errors.Is(err, errNoCreds) {
-			applyError(err.Error())
-			consecutiveFailures = 0
-			return interval
-		}
-		// transient error: retry with backoff. Compute the delay first so it can be displayed.
-		consecutiveFailures++
-		delay := nextRetryDelay(consecutiveFailures, interval, retryAfterFrom(err), rand.Float64())
-		age := time.Duration(1 << 62) // effectively infinite if lastSuccessAt is unset
-		if !lastSuccessAt.IsZero() {
-			age = time.Since(lastSuccessAt)
-		}
-		if lastUsage != nil && !shouldShowStale(age, interval) {
-			// still fresh → no display change (no-op)
-		} else if lastUsage != nil {
-			applyUsage(lastUsage, lastModel, true)
-		} else {
-			applyTransient(err.Error(), delay)
-		}
-		return delay
+	type claudeResult struct {
+		usage *usageResp
+		err   error
 	}
-	model, _ := readCurrentModel()
-	lastUsage, lastModel = usage, model
-	lastSuccessAt = time.Now()
-	consecutiveFailures = 0
-	applyUsage(usage, model, false)
-	return interval
+	type codexFetchResult struct {
+		usage *codexUsage
+		err   error
+	}
+	claudeCh := make(chan claudeResult, 1)
+	codexCh := make(chan codexFetchResult, 1)
+	go func() { u, err := fetchUsage(); claudeCh <- claudeResult{u, err} }()
+	go func() { u, err := fetchCodexUsage(); codexCh <- codexFetchResult{u, err} }()
+	claude := <-claudeCh
+	codexFetch := <-codexCh
+	usage, err := claude.usage, claude.err
+	codex, codexErr := codexFetch.usage, codexFetch.err
+	now := time.Now()
+	if err == nil {
+		lastUsage, lastModel, lastSuccessAt = usage, readModel(readCurrentModel), now
+	}
+	if codexErr == nil {
+		lastCodexUsage, lastCodexModel, lastCodexSuccessAt = codex, readModel(readCurrentCodexModel), now
+	}
+
+	transient := isTransient(err) || isTransient(codexErr)
+	var delay = interval
+	if transient {
+		consecutiveFailures++
+		delay = nextRetryDelay(consecutiveFailures, interval, maxRetryAfter(err, codexErr), rand.Float64())
+	} else {
+		consecutiveFailures = 0
+	}
+	applyCombined(err, codexErr, interval, delay)
+	return delay
+}
+
+func readModel(read func() (*currentModel, error)) *currentModel { model, _ := read(); return model }
+
+func isTransient(err error) bool {
+	var target *transientError
+	return errors.As(err, &target) || (err != nil && !errors.Is(err, errAuth) && !errors.Is(err, errNoCreds) && !errors.Is(err, errCodexAuth) && !errors.Is(err, errNoCodexCreds))
+}
+
+func maxRetryAfter(errs ...error) time.Duration {
+	var result time.Duration
+	for _, err := range errs {
+		if d := retryAfterFrom(err); d > result {
+			result = d
+		}
+	}
+	return result
 }
 
 func bgFor(u *usageResp) string {
@@ -143,6 +166,21 @@ func bgFor(u *usageResp) string {
 	case peak >= 0.95:
 		return colorAlert
 	case peak >= 0.8:
+		return colorWarn
+	default:
+		return colorNormal
+	}
+}
+
+func bgForCodex(u *codexUsage) string {
+	peak := u.FiveHour.UsedPercent
+	if u.Weekly != nil && u.Weekly.UsedPercent > peak {
+		peak = u.Weekly.UsedPercent
+	}
+	switch {
+	case peak >= 95:
+		return colorAlert
+	case peak >= 80:
 		return colorWarn
 	default:
 		return colorNormal
@@ -176,6 +214,18 @@ func detailLines(u *usageResp, model *currentModel) []string {
 	return lines
 }
 
+func codexDetailLines(u *codexUsage, model *currentModel) []string {
+	now := time.Now()
+	lines := []string{fmt.Sprintf("5h: %d%% · %s", u.FiveHour.UsedPercent, formatResetIn(u.FiveHour.ResetsAt, now))}
+	if u.Weekly != nil {
+		lines = append(lines, fmt.Sprintf("Weekly: %d%% · %s", u.Weekly.UsedPercent, formatResetIn(u.Weekly.ResetsAt, now)))
+	}
+	if model != nil {
+		lines = append(lines, fmt.Sprintf("Current model: %s (%s)", model.Name, model.ID))
+	}
+	return lines
+}
+
 func applyUsage(u *usageResp, model *currentModel, stale bool) {
 	systray.SetIcon(iconBytes(strconv.Itoa(pct(u.FiveHour.Utilization)), bgFor(u)))
 
@@ -189,6 +239,54 @@ func applyUsage(u *usageResp, model *currentModel, stale bool) {
 	for i, it := range detailItems {
 		if i < len(shown) {
 			it.SetTitle(shown[i])
+			it.Show()
+		} else {
+			it.Hide()
+		}
+	}
+}
+
+// applyCombined renders the two independent providers together. A failure in one provider never
+// hides the last successful value of the other one.
+func applyCombined(claudeErr, codexErr error, interval, retryIn time.Duration) {
+	claudeStale := claudeErr != nil && lastUsage != nil && shouldShowStale(time.Since(lastSuccessAt), interval)
+	codexStale := codexErr != nil && lastCodexUsage != nil && shouldShowStale(time.Since(lastCodexSuccessAt), interval)
+	lines := []string{}
+	if lastUsage != nil {
+		lines = append(lines, "Claude")
+		if claudeStale {
+			lines = append(lines, "⚠ Refresh failed — showing last value")
+		}
+		lines = append(lines, detailLines(lastUsage, lastModel)...)
+	} else if claudeErr != nil {
+		lines = append(lines, "Claude: "+claudeErr.Error())
+	}
+	if lastCodexUsage != nil {
+		lines = append(lines, "Codex")
+		if codexStale {
+			lines = append(lines, "⚠ Refresh failed — showing last value")
+		}
+		lines = append(lines, codexDetailLines(lastCodexUsage, lastCodexModel)...)
+	} else if codexErr != nil {
+		lines = append(lines, "Codex: "+codexErr.Error())
+	}
+	if isTransient(claudeErr) || isTransient(codexErr) {
+		lines = append(lines, formatRetryIn(retryIn))
+	}
+
+	if lastUsage != nil {
+		systray.SetIcon(iconBytes(strconv.Itoa(pct(lastUsage.FiveHour.Utilization)), bgFor(lastUsage)))
+	} else if lastCodexUsage != nil {
+		systray.SetIcon(iconBytes(strconv.Itoa(lastCodexUsage.FiveHour.UsedPercent), bgForCodex(lastCodexUsage)))
+	} else if isTransient(claudeErr) || isTransient(codexErr) {
+		systray.SetIcon(iconBytes("..", colorError))
+	} else {
+		systray.SetIcon(iconBytes("!", colorError))
+	}
+	systray.SetTooltip("Pulse\n" + strings.Join(lines, "\n"))
+	for i, it := range detailItems {
+		if i < len(lines) {
+			it.SetTitle(lines[i])
 			it.Show()
 		} else {
 			it.Hide()
