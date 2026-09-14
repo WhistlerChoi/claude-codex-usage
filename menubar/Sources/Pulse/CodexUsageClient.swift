@@ -90,7 +90,7 @@ private struct CodexCredentials {
     let accountId: String?
 }
 
-private func codexHome() -> URL {
+func codexHome() -> URL {
     let env = ProcessInfo.processInfo.environment
     if let configured = env["CODEX_HOME"], !configured.isEmpty {
         return URL(fileURLWithPath: configured)
