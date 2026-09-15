@@ -13,16 +13,16 @@ import (
 )
 
 var (
-	detailItems         []*systray.MenuItem
-	mRefresh, mQuit     *systray.MenuItem
-	lastUsage           *usageResp
-	lastModel           *currentModel
-	lastCodexUsage      *codexUsage
-	lastCodexModel      *currentModel
-	lastSuccessAt       time.Time
-	lastCodexSuccessAt  time.Time
-	consecutiveFailures int
-	manualRefresh       = make(chan struct{}, 1)
+	detailItems             []*systray.MenuItem
+	mAbout, mRefresh, mQuit *systray.MenuItem
+	lastUsage               *usageResp
+	lastModel               *currentModel
+	lastCodexUsage          *codexUsage
+	lastCodexModel          *currentModel
+	lastSuccessAt           time.Time
+	lastCodexSuccessAt      time.Time
+	consecutiveFailures     int
+	manualRefresh           = make(chan struct{}, 1)
 )
 
 const (
@@ -42,7 +42,16 @@ func main() {
 		if len(os.Args) > 2 {
 			out = os.Args[2]
 		}
-		_ = os.WriteFile(out, renderIconPNG("42", colorNormal), 0o644)
+		_ = os.WriteFile(out, renderIconPNG(colorNormal), 0o644)
+		fmt.Println("wrote", out)
+		return
+	}
+	if len(os.Args) > 1 && os.Args[1] == "--render-ico" {
+		out := "installer/Pulse.ico"
+		if len(os.Args) > 2 {
+			out = os.Args[2]
+		}
+		_ = os.WriteFile(out, pngToICO(renderAppIconPNG()), 0o644)
 		fmt.Println("wrote", out)
 		return
 	}
@@ -59,6 +68,7 @@ func onReady() {
 		detailItems = append(detailItems, it)
 	}
 	systray.AddSeparator()
+	mAbout = systray.AddMenuItem("About", "About Pulse")
 	mRefresh = systray.AddMenuItem("Refresh Now", "")
 	mQuit = systray.AddMenuItem("Quit", "")
 
@@ -66,6 +76,8 @@ func onReady() {
 	go func() {
 		for {
 			select {
+			case <-mAbout.ClickedCh:
+				showAbout()
 			case <-mRefresh.ClickedCh:
 				select {
 				case manualRefresh <- struct{}{}:
@@ -80,12 +92,7 @@ func onReady() {
 }
 
 func pollLoop() {
-	interval := 300
-	if v := os.Getenv("CLAUDE_USAGE_INTERVAL"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n >= 10 {
-			interval = n
-		}
-	}
+	interval := pollIntervalSeconds()
 	intervalDur := time.Duration(interval) * time.Second
 
 	delay := refresh(intervalDur)
@@ -187,6 +194,15 @@ func bgForCodex(u *codexUsage) string {
 	}
 }
 
+func pollIntervalSeconds() int {
+	if v := os.Getenv("CLAUDE_USAGE_INTERVAL"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 10 {
+			return n
+		}
+	}
+	return 300
+}
+
 func detailLines(u *usageResp, model *currentModel) []string {
 	now := time.Now()
 	lines := []string{
@@ -226,8 +242,29 @@ func codexDetailLines(u *codexUsage, model *currentModel) []string {
 	return lines
 }
 
+// compactTooltip keeps the Windows shell tooltip short enough that both
+// providers remain visible. The context menu still contains the full details.
+func compactTooltip(claudeErr, codexErr error) string {
+	parts := []string{}
+	if lastUsage != nil {
+		parts = append(parts, fmt.Sprintf("Claude 5h %d%% / wk %d%%", pct(lastUsage.FiveHour.Utilization), pct(lastUsage.SevenDay.Utilization)))
+	} else if claudeErr != nil {
+		parts = append(parts, "Claude: "+claudeErr.Error())
+	}
+	if lastCodexUsage != nil {
+		codex := fmt.Sprintf("Codex 5h %d%%", lastCodexUsage.FiveHour.UsedPercent)
+		if lastCodexUsage.Weekly != nil {
+			codex += fmt.Sprintf(" / wk %d%%", lastCodexUsage.Weekly.UsedPercent)
+		}
+		parts = append(parts, codex)
+	} else if codexErr != nil {
+		parts = append(parts, "Codex: "+codexErr.Error())
+	}
+	return strings.Join(parts, "\n")
+}
+
 func applyUsage(u *usageResp, model *currentModel, stale bool) {
-	systray.SetIcon(iconBytes(strconv.Itoa(pct(u.FiveHour.Utilization)), bgFor(u)))
+	systray.SetIcon(iconBytes(bgFor(u)))
 
 	lines := detailLines(u, model)
 	shown := lines
@@ -275,15 +312,15 @@ func applyCombined(claudeErr, codexErr error, interval, retryIn time.Duration) {
 	}
 
 	if lastUsage != nil {
-		systray.SetIcon(iconBytes(strconv.Itoa(pct(lastUsage.FiveHour.Utilization)), bgFor(lastUsage)))
+		systray.SetIcon(iconBytes(bgFor(lastUsage)))
 	} else if lastCodexUsage != nil {
-		systray.SetIcon(iconBytes(strconv.Itoa(lastCodexUsage.FiveHour.UsedPercent), bgForCodex(lastCodexUsage)))
+		systray.SetIcon(iconBytes(bgForCodex(lastCodexUsage)))
 	} else if isTransient(claudeErr) || isTransient(codexErr) {
-		systray.SetIcon(iconBytes("..", colorError))
+		systray.SetIcon(iconBytes(colorError))
 	} else {
-		systray.SetIcon(iconBytes("!", colorError))
+		systray.SetIcon(iconBytes(colorError))
 	}
-	systray.SetTooltip("Pulse\n" + strings.Join(lines, "\n"))
+	systray.SetTooltip(compactTooltip(claudeErr, codexErr))
 	for i, it := range detailItems {
 		if i < len(lines) {
 			it.SetTitle(lines[i])
@@ -295,7 +332,7 @@ func applyCombined(claudeErr, codexErr error, interval, retryIn time.Duration) {
 }
 
 func applyError(message string) {
-	systray.SetIcon(iconBytes("!", colorError))
+	systray.SetIcon(iconBytes(colorError))
 	systray.SetTooltip("Pulse\n⚠ " + message)
 	for i, it := range detailItems {
 		if i == 0 {
@@ -311,9 +348,7 @@ func applyError(message string) {
 // neutral "··" rather than the "!" of a real error, and names the retry time, so a throttle is
 // never presented as something the user has to fix.
 func applyTransient(message string, retryIn time.Duration) {
-	// ".." not "··": the 32px icon is drawn with basicfont.Face7x13, which has no MIDDLE DOT glyph
-	// and would render tofu boxes. The menu text below is identical to the other ports.
-	systray.SetIcon(iconBytes("..", colorError))
+	systray.SetIcon(iconBytes(colorError))
 	retry := formatRetryIn(retryIn)
 	systray.SetTooltip("Pulse\n⚠ " + message + "\n" + retry)
 	lines := []string{message, retry}

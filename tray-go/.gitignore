@@ -3,5 +3,10 @@ Pulse.exe
 *.exe
 cu-mac
 
+# MSI installer build output
+*.msi
+*.wixpdb
+installer/Pulse.ico
+
 # macOS
 .DS_Store

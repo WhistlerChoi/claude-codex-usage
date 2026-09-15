@@ -6,16 +6,16 @@ import (
 	"image"
 	"image/color"
 	"image/png"
+	"math"
 	"runtime"
-	"unicode/utf8"
-
-	"golang.org/x/image/draw"
-	"golang.org/x/image/font"
-	"golang.org/x/image/font/basicfont"
-	"golang.org/x/image/math/fixed"
 )
 
 const iconSize = 32
+
+var (
+	macIconTop    = color.RGBA{230, 133, 87, 255}
+	macIconBottom = color.RGBA{158, 69, 43, 255}
+)
 
 func parseHex(s string) color.RGBA {
 	if len(s) == 7 && s[0] == '#' {
@@ -67,8 +67,8 @@ func inRoundRect(x, y, size, r int) bool {
 	return true
 }
 
-// renderIconPNG: a 32x32 PNG with a rounded-rectangle background and white digits.
-func renderIconPNG(text, bgHex string) []byte {
+// renderIconPNG: a 32x32 PNG with the same white gauge glyph as the macOS app icon.
+func renderIconPNG(bgHex string) []byte {
 	img := image.NewRGBA(image.Rect(0, 0, iconSize, iconSize))
 	bg := parseHex(bgHex)
 	for y := 0; y < iconSize; y++ {
@@ -79,37 +79,79 @@ func renderIconPNG(text, bgHex string) []byte {
 		}
 	}
 
-	// draw the digits with a small bitmap font, then scale up and center them.
-	// Count runes, not bytes: non-ASCII text like "··" is multi-byte and would otherwise reserve
-	// twice the width it needs, shrinking the glyphs and pushing them off-center.
-	tw := 7 * utf8.RuneCountInString(text)
-	th := 13
-	tmp := image.NewRGBA(image.Rect(0, 0, tw, th))
-	d := &font.Drawer{
-		Dst:  tmp,
-		Src:  image.NewUniform(color.White),
-		Face: basicfont.Face7x13,
-		Dot:  fixed.P(0, 11),
-	}
-	d.DrawString(text)
-
-	maxW, maxH := float64(iconSize-6), float64(iconSize-8)
-	s := maxW / float64(tw)
-	if sy := maxH / float64(th); sy < s {
-		s = sy
-	}
-	dw, dh := int(float64(tw)*s), int(float64(th)*s)
-	x0, y0 := (iconSize-dw)/2, (iconSize-dh)/2
-	draw.ApproxBiLinear.Scale(img, image.Rect(x0, y0, x0+dw, y0+dh), tmp, tmp.Bounds(), draw.Over, nil)
+	drawGauge(img, color.RGBA{255, 255, 255, 255})
 
 	var buf bytes.Buffer
 	_ = png.Encode(&buf, img)
 	return buf.Bytes()
 }
 
+// renderAppIconPNG is used by the installer and matches the macOS app icon's
+// warm Claude-family gradient. The tray itself still uses status colors.
+func renderAppIconPNG() []byte {
+	img := image.NewRGBA(image.Rect(0, 0, iconSize, iconSize))
+	for y := 0; y < iconSize; y++ {
+		for x := 0; x < iconSize; x++ {
+			if inRoundRect(x, y, iconSize, 6) {
+				t := float64(x+y) / float64(2*(iconSize-1))
+				img.Set(x, y, color.RGBA{
+					lerpByte(macIconTop.R, macIconBottom.R, t),
+					lerpByte(macIconTop.G, macIconBottom.G, t),
+					lerpByte(macIconTop.B, macIconBottom.B, t), 255,
+				})
+			}
+		}
+	}
+	drawGauge(img, color.RGBA{255, 255, 255, 255})
+	var buf bytes.Buffer
+	_ = png.Encode(&buf, img)
+	return buf.Bytes()
+}
+
+func lerpByte(a, b uint8, t float64) uint8 { return uint8(float64(a) + (float64(b)-float64(a))*t) }
+
+func drawGauge(img *image.RGBA, c color.RGBA) {
+	cx, cy, radius := 16.0, 20.0, 7.0
+	const start, end = 200.0, 340.0
+	var px, py float64
+	for i := 0; i <= 28; i++ {
+		angle := (start + (end-start)*float64(i)/28) * math.Pi / 180
+		x := cx + radius*math.Cos(angle)
+		y := cy + radius*math.Sin(angle)
+		if i > 0 {
+			drawIconLine(img, px, py, x, y, 1.35, c)
+		}
+		px, py = x, y
+	}
+	drawIconLine(img, 10.5, 20, 21.5, 20, 1.35, c)
+	drawIconLine(img, cx, cy, 18.7, 14.3, 1.35, c)
+	drawIconDot(img, cx, cy, 1.5, c)
+}
+
+func drawIconLine(img *image.RGBA, x1, y1, x2, y2, width float64, c color.RGBA) {
+	steps := int(math.Max(math.Abs(x2-x1), math.Abs(y2-y1))*4) + 1
+	for i := 0; i <= steps; i++ {
+		t := float64(i) / float64(steps)
+		drawIconDot(img, x1+(x2-x1)*t, y1+(y2-y1)*t, width/2, c)
+	}
+}
+
+func drawIconDot(img *image.RGBA, x, y, radius float64, c color.RGBA) {
+	for py := int(y-radius) - 1; py <= int(y+radius)+1; py++ {
+		for px := int(x-radius) - 1; px <= int(x+radius)+1; px++ {
+			if px >= 0 && px < iconSize && py >= 0 && py < iconSize {
+				dx, dy := float64(px)+0.5-x, float64(py)+0.5-y
+				if dx*dx+dy*dy <= radius*radius {
+					img.Set(px, py, c)
+				}
+			}
+		}
+	}
+}
+
 // iconBytes: ICO on Windows, PNG elsewhere.
-func iconBytes(text, bgHex string) []byte {
-	pngBytes := renderIconPNG(text, bgHex)
+func iconBytes(bgHex string) []byte {
+	pngBytes := renderIconPNG(bgHex)
 	if runtime.GOOS == "windows" {
 		return pngToICO(pngBytes)
 	}
@@ -124,14 +166,14 @@ func pngToICO(pngBytes []byte) []byte {
 	_ = binary.Write(&buf, binary.LittleEndian, uint16(1)) // type: icon
 	_ = binary.Write(&buf, binary.LittleEndian, uint16(1)) // count
 	// ICONDIRENTRY
-	buf.WriteByte(iconSize) // width
-	buf.WriteByte(iconSize) // height
-	buf.WriteByte(0)        // color count
-	buf.WriteByte(0)        // reserved
-	_ = binary.Write(&buf, binary.LittleEndian, uint16(1))               // planes
-	_ = binary.Write(&buf, binary.LittleEndian, uint16(32))              // bit count
-	_ = binary.Write(&buf, binary.LittleEndian, uint32(len(pngBytes)))   // bytes in res
-	_ = binary.Write(&buf, binary.LittleEndian, uint32(6+16))            // image offset
+	buf.WriteByte(iconSize)                                            // width
+	buf.WriteByte(iconSize)                                            // height
+	buf.WriteByte(0)                                                   // color count
+	buf.WriteByte(0)                                                   // reserved
+	_ = binary.Write(&buf, binary.LittleEndian, uint16(1))             // planes
+	_ = binary.Write(&buf, binary.LittleEndian, uint16(32))            // bit count
+	_ = binary.Write(&buf, binary.LittleEndian, uint32(len(pngBytes))) // bytes in res
+	_ = binary.Write(&buf, binary.LittleEndian, uint32(6+16))          // image offset
 	buf.Write(pngBytes)
 	return buf.Bytes()
 }
