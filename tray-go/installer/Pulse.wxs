@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="utf-8"?>
+<?ifndef ProductVersion ?>
+<?define ProductVersion = "1.4.0" ?>
+<?endif?>
+<Wix
+  xmlns="http://wixtoolset.org/schemas/v4/wxs"
+  xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
+  <Package
+    Name="Pulse"
+    Manufacturer="AGLE"
+    Version="$(var.ProductVersion)"
+    UpgradeCode="7F6715D4-6CB2-46AA-876D-9D2AA69A882E"
+    Language="1033"
+    Scope="perMachine">
+
+    <Icon Id="PulseIcon" SourceFile="$(var.PulseIcon)" />
+    <Property Id="ARPPRODUCTICON" Value="PulseIcon" />
+
+    <MajorUpgrade
+      AllowSameVersionUpgrades="yes"
+      DowngradeErrorMessage="A newer version of Pulse is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <StandardDirectory Id="ProgramFiles6432Folder">
+      <Directory Id="INSTALLFOLDER" Name="Pulse">
+        <Component Id="PulseExecutable" Guid="*">
+          <File Id="PulseExe" Source="$(var.PulseExe)" KeyPath="yes" />
+        </Component>
+      </Directory>
+    </StandardDirectory>
+
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Directory Id="PulseProgramsFolder" Name="Pulse">
+        <Component Id="StartMenuShortcut" Guid="*">
+          <Shortcut
+            Id="StartPulse"
+            Name="Pulse"
+            Description="Claude Code and Codex usage in your system tray"
+            Target="[#PulseExe]"
+            WorkingDirectory="INSTALLFOLDER" />
+          <RemoveFolder Id="RemovePulseProgramsFolder" On="uninstall" />
+          <RegistryValue
+            Root="HKCU"
+            Key="Software\AGLE\Pulse"
+            Name="StartMenuShortcut"
+            Type="integer"
+            Value="1"
+            KeyPath="yes" />
+        </Component>
+      </Directory>
+    </StandardDirectory>
+
+    <Feature Id="MainFeature" Title="Pulse" Level="1">
+      <ComponentRef Id="PulseExecutable" />
+      <ComponentRef Id="StartMenuShortcut" />
+    </Feature>
+
+    <ui:WixUI Id="WixUI_Minimal" />
+    <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOXTEXT" Value="Launch Pulse" />
+    <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOX" Value="1" />
+    <CustomAction Id="LaunchPulse" FileRef="PulseExe" ExeCommand="" Return="asyncNoWait" />
+    <UI>
+      <Publish
+        Dialog="ExitDialog"
+        Control="Finish"
+        Event="DoAction"
+        Value="LaunchPulse"
+        Condition="WIXUI_EXITDIALOGOPTIONALCHECKBOX = 1 AND NOT Installed" />
+    </UI>
+  </Package>
+</Wix>
