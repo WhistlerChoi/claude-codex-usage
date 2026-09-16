@@ -23,7 +23,7 @@ struct UsageData {
 struct UsageRow {
     let label: String   // "5h", "Weekly", "Weekly Opus", "Weekly Fable", ...
     let pct: Int         // 0-100
-    let reset: String    // already-formatted, e.g. "resets in 4h 26m"
+    let reset: String    // bare duration, e.g. "4h 26m" (the column caption says "resets in")
 }
 
 /// One provider's block in the dropdown: the header (with the current model, if known)

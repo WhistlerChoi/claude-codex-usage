@@ -36,14 +36,8 @@ func resetProgress(
     return resetProgress(until: target, window: window, now: now)
 }
 
-/// Time remaining until resetsAt, in English.
-func formatResetIn(_ resetsAt: String?, now: Date = Date()) -> String {
-    guard let resetsAt = resetsAt, let target = parseISODate(resetsAt) else {
-        return "reset time unknown"
-    }
-    let diff = target.timeIntervalSince(now)
-    if diff <= 0 { return "resets soon" }
-
+/// Compact "5d 4h" / "3h 5m" / "<1m" for a positive time interval.
+private func resetDurationText(_ diff: TimeInterval) -> String {
     let totalMin = Int(diff / 60)
     let days = totalMin / (60 * 24)
     let hours = (totalMin % (60 * 24)) / 60
@@ -54,7 +48,31 @@ func formatResetIn(_ resetsAt: String?, now: Date = Date()) -> String {
     if hours > 0 { parts.append("\(hours)h") }
     if days == 0 && mins > 0 { parts.append("\(mins)m") }
     if parts.isEmpty { parts.append("<1m") }
-    return "resets in " + parts.joined(separator: " ")
+    return parts.joined(separator: " ")
+}
+
+/// Bare time remaining until a reset ("3h 5m"), for the dropdown table whose column caption
+/// already says "resets in". "soon" once the reset time has passed, "—" when unknown.
+func formatResetDuration(_ resetsAt: Date?, now: Date = Date()) -> String {
+    guard let target = resetsAt else { return "—" }
+    let diff = target.timeIntervalSince(now)
+    if diff <= 0 { return "soon" }
+    return resetDurationText(diff)
+}
+
+/// ISO-string overload of `formatResetDuration` (the Claude API's `resets_at`).
+func formatResetDuration(_ resetsAt: String?, now: Date = Date()) -> String {
+    guard let resetsAt, let target = parseISODate(resetsAt) else { return "—" }
+    return formatResetDuration(target, now: now)
+}
+
+/// Time remaining until resetsAt, in English ("resets in 4h 26m"). Used wherever the phrase
+/// stands alone: tooltip lines, `--once` output, and the other ports' identical strings.
+func formatResetIn(_ resetsAt: String?, now: Date = Date()) -> String {
+    guard let resetsAt = resetsAt, let target = parseISODate(resetsAt) else {
+        return "reset time unknown"
+    }
+    return formatResetIn(target, now: now)
 }
 
 /// Time remaining until a Date-based reset (used by the Codex provider).
@@ -62,17 +80,7 @@ func formatResetIn(_ resetsAt: Date?, now: Date = Date()) -> String {
     guard let target = resetsAt else { return "reset time unknown" }
     let diff = target.timeIntervalSince(now)
     if diff <= 0 { return "resets soon" }
-
-    let totalMin = Int(diff / 60)
-    let days = totalMin / (60 * 24)
-    let hours = (totalMin % (60 * 24)) / 60
-    let mins = totalMin % 60
-    var parts: [String] = []
-    if days > 0 { parts.append("\(days)d") }
-    if hours > 0 { parts.append("\(hours)h") }
-    if days == 0 && mins > 0 { parts.append("\(mins)m") }
-    if parts.isEmpty { parts.append("<1m") }
-    return "resets in " + parts.joined(separator: " ")
+    return "resets in " + resetDurationText(diff)
 }
 
 /// Peak utilization across the two windows (0-1 fraction).

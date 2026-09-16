@@ -412,34 +412,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         var claudeRows: [UsageRow] = [
             UsageRow(label: "5h", pct: pct(usage.fiveHour.utilization),
-                     reset: formatResetIn(usage.fiveHour.resetsAt)),
+                     reset: formatResetDuration(usage.fiveHour.resetsAt)),
             UsageRow(label: "Weekly", pct: pct(usage.sevenDay.utilization),
-                     reset: formatResetIn(usage.sevenDay.resetsAt)),
+                     reset: formatResetDuration(usage.sevenDay.resetsAt)),
         ]
         var legacyModels = Set<String>()
         if let opus = usage.sevenDayOpus {
             claudeRows.append(UsageRow(label: "Weekly Opus", pct: pct(opus.utilization),
-                                 reset: formatResetIn(opus.resetsAt)))
+                                 reset: formatResetDuration(opus.resetsAt)))
             legacyModels.insert("Opus")
         }
         if let sonnet = usage.sevenDaySonnet {
             claudeRows.append(UsageRow(label: "Weekly Sonnet", pct: pct(sonnet.utilization),
-                                 reset: formatResetIn(sonnet.resetsAt)))
+                                 reset: formatResetDuration(sonnet.resetsAt)))
             legacyModels.insert("Sonnet")
         }
         for scoped in usage.weeklyScoped where !legacyModels.contains(scoped.model) {
             claudeRows.append(UsageRow(label: "Weekly \(scoped.model)", pct: pct(scoped.window.utilization),
-                                 reset: formatResetIn(scoped.window.resetsAt)))
+                                 reset: formatResetDuration(scoped.window.resetsAt)))
         }
         var codexSection: ProviderSection?
         if let codex = lastCodexUsage {
             var codexRows = [
                 UsageRow(label: "5h", pct: codex.fiveHour.usedPercent,
-                         reset: formatResetIn(codex.fiveHour.resetsAt))
+                         reset: formatResetDuration(codex.fiveHour.resetsAt))
             ]
             if let weekly = codex.weekly {
                 codexRows.append(UsageRow(label: "Weekly", pct: weekly.usedPercent,
-                                          reset: formatResetIn(weekly.resetsAt)))
+                                          reset: formatResetDuration(weekly.resetsAt)))
             }
             codexSection = ProviderSection(rows: codexRows, model: lastCodexModel)
         }
@@ -599,18 +599,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // and the reset column would start at a different x in each section.
         let widths = usageTableColumnWidths(sections: [claude.rows, codex?.rows ?? []])
 
-        func addSection(_ provider: Provider, _ section: ProviderSection) {
+        // The "resets in" column caption is drawn once, over the first table only.
+        func addSection(_ provider: Provider, _ section: ProviderSection, caption: Bool) {
             menu.addItem(makeProviderHeaderItem(provider, model: section.model))
             let tableItem = NSMenuItem()
             tableItem.isEnabled = true
-            tableItem.view = makeUsageTableView(rows: section.rows, columnWidths: widths)
+            tableItem.view = makeUsageTableView(
+                rows: section.rows, columnWidths: widths, captionResetColumn: caption)
             menu.addItem(tableItem)
         }
 
-        addSection(.claude, claude)
+        addSection(.claude, claude, caption: true)
         if let codex {
             menu.addItem(.separator())
-            addSection(.codex, codex)
+            addSection(.codex, codex, caption: false)
         }
         appendInteractiveItems(
             to: menu, showLogin: false, showCodexLogin: showCodexLogin, updatedAt: updatedAt)
@@ -759,33 +761,42 @@ func usageTableFonts() -> (menu: NSFont, digit: NSFont) {
     return (menu, NSFont.monospacedDigitSystemFont(ofSize: menu.pointSize, weight: .regular))
 }
 
-/// Width of the widest label cell and the widest percent cell across *all* rows of *all*
+/// Width of the widest label, percent and reset cell across *all* rows of *all*
 /// provider sections. Both usage tables must be built with these widths or their columns
 /// disagree: NSGridView sizes each column to the widest cell in that grid alone, so
-/// Claude's ("Weekly Fable", "43%") and Codex's ("Weekly", "0%") end up different widths
-/// and the reset column starts at a different x in each section.
-func usageTableColumnWidths(sections: [[UsageRow]]) -> (label: CGFloat, pct: CGFloat) {
+/// Claude's ("Weekly Fable", "43%") and Codex's ("Weekly", "0%") end up different widths.
+/// The reset column matters just as much as the other two: it is right-aligned at the menu's
+/// edge, so a section whose widest reset is narrower ("5d 2h" vs "16h 16m") starts that column
+/// further right and leaves its percent cell stranded mid-row instead of tucked against it.
+func usageTableColumnWidths(sections: [[UsageRow]]) -> (label: CGFloat, pct: CGFloat, reset: CGFloat) {
     let fonts = usageTableFonts()
     var label: CGFloat = 0
     var pct: CGFloat = 0
+    var reset: CGFloat = 0
     for rows in sections {
         for row in rows {
             label = max(label, (row.label as NSString).size(withAttributes: [.font: fonts.menu]).width)
             pct = max(pct, ("\(row.pct)%" as NSString).size(withAttributes: [.font: fonts.digit]).width)
+            reset = max(reset, (row.reset as NSString).size(withAttributes: [.font: fonts.menu]).width)
         }
     }
-    return (ceil(label), ceil(pct))
+    return (ceil(label), ceil(pct), ceil(reset))
 }
 
 /// Build a non-interactive view hosting an aligned 3-column usage table
-/// (label | percent right-aligned | reset). Sized to its intrinsic content so the
+/// (label | percent right-aligned | remaining time). Sized to its intrinsic content so the
 /// menu item adopts the table's width. A free function so the offscreen render path
 /// can build it without an AppDelegate.
 ///
 /// Pass `columnWidths` (from `usageTableColumnWidths` over every section's rows) so the
 /// label and percent columns match across provider sections; `nil` keeps each table
-/// self-sizing.
-func makeUsageTableView(rows: [UsageRow], columnWidths: (label: CGFloat, pct: CGFloat)? = nil) -> NSView {
+/// self-sizing. `captionResetColumn` adds a small "resets in" caption row above the
+/// table, over the third column — meant for the first section only, so the phrase appears
+/// once in the menu instead of on every row.
+func makeUsageTableView(
+    rows: [UsageRow], columnWidths: (label: CGFloat, pct: CGFloat, reset: CGFloat)? = nil,
+    captionResetColumn: Bool = false
+) -> NSView {
     // Match the standard menu item insets so the table lines up with the items
     // below the separator. `leading` ~= the menu's text gutter (checkmark + gap).
     let leading: CGFloat = 21
@@ -794,36 +805,65 @@ func makeUsageTableView(rows: [UsageRow], columnWidths: (label: CGFloat, pct: CG
 
     let (menuFont, digitFont) = usageTableFonts()
 
-    func cell(_ s: String, font: NSFont, color: NSColor, align: NSTextAlignment = .left) -> NSTextField {
+    func cell(
+        _ s: String, font: NSFont, color: NSColor, align: NSTextAlignment = .left,
+        stretches: Bool = false
+    ) -> NSTextField {
         let t = NSTextField(labelWithString: s)
         t.font = font
         t.textColor = color
         t.alignment = align
         t.lineBreakMode = .byClipping
         t.translatesAutoresizingMaskIntoConstraints = false
+        if stretches {
+            // Let the label column absorb any extra width the menu is stretched to (a long
+            // header line, e.g. "Sonnet (claude-sonnet-5)", widens the whole item view).
+            // Otherwise NSGridView hands that slack to the last flexible column instead —
+            // pushing the reset column away from percent and leaving percent looking
+            // centered instead of tucked against it at the right edge.
+            t.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        }
         return t
     }
 
-    let gridRows: [[NSView]] = rows.map { row in
+    var gridRows: [[NSView]] = []
+    if captionResetColumn {
+        let captionFont = NSFont.systemFont(ofSize: menuFont.pointSize - 2)
+        gridRows.append([
+            NSView(), NSView(),
+            cell("resets in", font: captionFont, color: .secondaryLabelColor, align: .right),
+        ])
+    }
+    gridRows += rows.map { row in
         [
-            cell(row.label, font: menuFont, color: .labelColor),
+            cell(row.label, font: menuFont, color: .labelColor, stretches: true),
             cell("\(row.pct)%", font: digitFont, color: .labelColor, align: .right),
-            cell("· \(row.reset)", font: menuFont, color: .secondaryLabelColor),
+            cell(row.reset, font: menuFont, color: .secondaryLabelColor, align: .right),
         ]
     }
     let grid = NSGridView(views: gridRows)
     grid.translatesAutoresizingMaskIntoConstraints = false
-    grid.rowSpacing = 3
+    grid.rowSpacing = 4
     grid.columnSpacing = 8
     grid.column(at: 0).xPlacement = NSGridCell.Placement.leading
     grid.column(at: 1).xPlacement = NSGridCell.Placement.trailing  // line up the % signs
-    grid.column(at: 2).xPlacement = NSGridCell.Placement.leading
+    grid.column(at: 2).xPlacement = NSGridCell.Placement.trailing  // right-align remaining time
+    // Percent and remaining time sit close together as one right-aligned block; the label
+    // column (set to stretch, above) absorbs any extra width instead.
+    grid.column(at: 0).trailingPadding = 16
+    grid.column(at: 1).trailingPadding = 6
     if let w = columnWidths {
-        // Fixed, not minimum — but measured from these very rows, so never narrower
-        // than the widest cell. The reset column stays auto-sized; pinning columns 0
-        // and 1 already puts its left edge at the same x in every section.
-        grid.column(at: 0).width = w.label
+        // Percent stays fixed-width so the "%" signs line up across sections. The label
+        // column instead gets a *minimum* width, via constraints on its cells rather than
+        // `NSGridColumn.width` (which pins an exact width): that leaves it free to grow when
+        // the menu is stretched wider by a long header line, so that slack lands here —
+        // between label and percent — instead of prying percent away from reset.
         grid.column(at: 1).width = w.pct
+        grid.column(at: 2).width = w.reset
+        for i in 0..<gridRows.count {
+            let labelCell = gridRows[i][0]
+            labelCell.widthAnchor.constraint(greaterThanOrEqualToConstant: w.label).isActive = true
+        }
     }
 
     let container = NSView()
@@ -842,7 +882,19 @@ func makeUsageTableView(rows: [UsageRow], columnWidths: (label: CGFloat, pct: CG
         grid.topAnchor.constraint(equalTo: container.topAnchor, constant: vPad),
         grid.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -vPad),
     ])
-    container.frame = NSRect(origin: .zero, size: container.fittingSize)
+    // Measure the intrinsic width with Auto Layout, then hand off to frame-based sizing —
+    // same reasoning as makeProviderHeaderView: NSMenu widens a menu-item view by setting its
+    // frame directly, and without `autoresizingMask` (and constraints switched off) that width
+    // change never reaches `grid`, so a narrower table (Codex, with only "5h"/"Weekly" labels)
+    // silently keeps its own intrinsic width while a wider one (Claude) gets stretched.
+    let fitting = container.fittingSize
+    container.translatesAutoresizingMaskIntoConstraints = true
+    container.autoresizingMask = [.width]
+    container.frame = NSRect(origin: .zero, size: fitting)
+    grid.translatesAutoresizingMaskIntoConstraints = true
+    grid.autoresizingMask = [.width]
+    grid.frame = NSRect(x: leading, y: vPad, width: fitting.width - leading - trailing,
+                         height: fitting.height - 2 * vPad)
     return container
 }
 
@@ -1077,6 +1129,23 @@ if CommandLine.arguments.contains("--selftest") {
           "resetProgress clamps dates beyond the window")
     check(resetProgress(until: gaugeNow.addingTimeInterval(-1), now: gaugeNow) == 0,
           "resetProgress clamps elapsed resets")
+
+    // formatResetDuration: bare duration for the dropdown table; formatResetIn keeps the phrase.
+    let t0 = Date(timeIntervalSince1970: 1_700_000_000)
+    check(formatResetDuration(t0.addingTimeInterval(3 * 3600 + 5 * 60), now: t0) == "3h 5m",
+          "formatResetDuration h m")
+    check(formatResetDuration(t0.addingTimeInterval(5 * 86400 + 4 * 3600 + 30 * 60), now: t0) == "5d 4h",
+          "formatResetDuration d h (minutes dropped)")
+    check(formatResetDuration(t0.addingTimeInterval(20), now: t0) == "<1m", "formatResetDuration <1m")
+    check(formatResetDuration(t0.addingTimeInterval(-5), now: t0) == "soon", "formatResetDuration past → soon")
+    check(formatResetDuration(nil as Date?, now: t0) == "—", "formatResetDuration nil → —")
+    check(formatResetDuration("2023-11-14T22:13:20+00:00", now: t0.addingTimeInterval(-90 * 60)) == "1h 30m",
+          "formatResetDuration ISO string")
+    check(formatResetDuration("garbage", now: t0) == "—", "formatResetDuration unparsable → —")
+    check(formatResetIn(t0.addingTimeInterval(3 * 3600 + 5 * 60), now: t0) == "resets in 3h 5m",
+          "formatResetIn keeps prefix")
+    check(formatResetIn(t0.addingTimeInterval(-5), now: t0) == "resets soon", "formatResetIn past")
+    check(formatResetIn(nil as Date?, now: t0) == "reset time unknown", "formatResetIn nil")
     let noResetDate: Date? = nil
     check(resetProgress(until: noResetDate, now: gaugeNow) == nil,
           "resetProgress preserves an unknown reset")
@@ -1324,22 +1393,25 @@ if let idx = CommandLine.arguments.firstIndex(of: "--menu") {
     // is a genuine regression check: the two blocks' `%` right edge and `· resets in` left edge
     // must land at the same x.
     let claudeRows = [
-        UsageRow(label: "5h", pct: 3, reset: "resets in 2h 13m"),
-        UsageRow(label: "Weekly", pct: 27, reset: "resets in 4d 6h"),
-        UsageRow(label: "Weekly Opus", pct: 100, reset: "resets in 4d 6h"),
-        UsageRow(label: "Weekly Sonnet", pct: 8, reset: "resets in 16h 16m"),
-        UsageRow(label: "Weekly Fable", pct: 12, reset: "resets in 4d 6h"),
+        UsageRow(label: "5h", pct: 3, reset: "2h 13m"),
+        UsageRow(label: "Weekly", pct: 27, reset: "4d 6h"),
+        UsageRow(label: "Weekly Opus", pct: 100, reset: "4d 6h"),
+        UsageRow(label: "Weekly Sonnet", pct: 8, reset: "16h 16m"),
+        UsageRow(label: "Weekly Fable", pct: 12, reset: "4d 6h"),
     ]
     let codexRows = [
-        UsageRow(label: "5h", pct: 0, reset: "resets in 3h 1m"),
-        UsageRow(label: "Weekly", pct: 48, reset: "resets in 5d 2h"),
+        UsageRow(label: "5h", pct: 0, reset: "3h 1m"),
+        UsageRow(label: "Weekly", pct: 48, reset: "5d 2h"),
     ]
     let widths = usageTableColumnWidths(sections: [claudeRows, codexRows])
     // Each provider's header carries its current model at the right edge; the model label
     // must end at the same x in both headers once the views are stretched to the menu width.
+    // A header longer than the table below it (as reported: "Sonnet (claude-sonnet-5)"
+    // stretches the item view wider than the table's own intrinsic width) is the case that
+    // used to pull percent away from the reset column — keep exercising it here.
     let items: [NSView] = [
-        makeProviderHeaderView(.claude, model: CurrentModel(id: "claude-opus-5", name: "Opus")),
-        makeUsageTableView(rows: claudeRows, columnWidths: widths),
+        makeProviderHeaderView(.claude, model: CurrentModel(id: "claude-sonnet-5", name: "Sonnet")),
+        makeUsageTableView(rows: claudeRows, columnWidths: widths, captionResetColumn: true),
         makeProviderHeaderView(.codex, model: CurrentModel(id: "gpt-5.6-terra", name: "GPT-5.6-Terra")),
         makeUsageTableView(rows: codexRows, columnWidths: widths),
     ]

@@ -2,7 +2,7 @@
   "name": "pulse",
   "displayName": "Pulse for Claude Code",
   "description": "Show Claude Code's 5-hour/weekly usage in the status bar.",
-  "version": "0.4.0",
+  "version": "1.4.1",
   "publisher": "wemeet",
   "engines": {
     "vscode": "^1.85.0"
