@@ -5,8 +5,8 @@ A **native Go** app that shows Claude Code and Codex usage in the system tray.
 
 ## What it shows
 
-- **Icon**: a colored badge with Claude's 5-hour / weekly usage (`42/18`) — blue (normal) / orange (80%+) / red (95%+). If Claude is unavailable, it shows Codex's 5-hour / weekly usage instead when available.
-- **Hover tooltip / right-click menu**: separate Claude and Codex sections with 5-hour, weekly, per-model Claude limits, current model, and time until reset
+- **Icon**: a gauge glyph on a colored rounded square — blue (normal) / orange (80%+) / red (95%+). The color follows Claude's usage, or Codex's when Claude's is unavailable. The percentages themselves are in the tooltip.
+- **Hover tooltip / right-click menu**: separate Claude and Codex sections with 5-hour, weekly, per-model Claude limits, current model, and time until reset. In the menu the reset times sit in a tab-aligned right column, so they line up across the Claude and Codex sections.
 - **Right-click menu**: details + `About` / `Refresh Now` / `Quit`
 
 ## How it works

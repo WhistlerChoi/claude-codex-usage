@@ -74,12 +74,33 @@ func formatResetIn(resetsAt *string, now time.Time) string {
 	return "resets in " + strings.Join(parts, " ")
 }
 
+// usageRow renders one usage line for the tray menu: "5h: 41%\tresets in 2h 17m".
+//
+// The tab matters. Windows renders a tab in an MFT_STRING menu item as the native
+// accelerator column, right-aligning everything after it, which is the only column
+// alignment available here: getlantern/systray sets every item as a plain string with no
+// owner-draw, and the menu font is proportional, so space padding cannot line digits up.
+// The macOS menu bar gets the same effect from an NSGridView with shared column widths —
+// the layout differs by necessity, but the reset times line up in both.
+//
+// The reset text keeps its full "resets in …" wording, unlike the menubar dropdown, whose
+// table carries a single "resets in" column caption instead. There is nowhere to put that
+// caption in a native Windows menu, so dropping the phrase here would leave a bare duration
+// with nothing to explain it.
+func usageRow(label string, percent int, reset string) string {
+	row := fmt.Sprintf("%s: %d%%", label, percent)
+	if reset == "" {
+		return row
+	}
+	return row + "\t" + reset
+}
+
 func peakUtilization(u *usageResp) float64 {
 	return math.Max(u.FiveHour.Utilization, u.SevenDay.Utilization) / 100
 }
 
 const maxRetry = 3600 * time.Second // upper bound on retry delay (1 hour)
-const retryFloor = 60 * time.Second  // floor for 429 backoff (60s)
+const retryFloor = 60 * time.Second // floor for 429 backoff (60s)
 
 // nextRetryDelay: delay until the next poll after a transient failure.
 //   - if retryAfter>0, honor it (do not clamp to interval; only cap at maxRetry).

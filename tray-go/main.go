@@ -206,23 +206,23 @@ func pollIntervalSeconds() int {
 func detailLines(u *usageResp, model *currentModel) []string {
 	now := time.Now()
 	lines := []string{
-		fmt.Sprintf("5h: %d%% · %s", pct(u.FiveHour.Utilization), formatResetIn(u.FiveHour.ResetsAt, now)),
-		fmt.Sprintf("Weekly: %d%% · %s", pct(u.SevenDay.Utilization), formatResetIn(u.SevenDay.ResetsAt, now)),
+		usageRow("5h", pct(u.FiveHour.Utilization), formatResetIn(u.FiveHour.ResetsAt, now)),
+		usageRow("Weekly", pct(u.SevenDay.Utilization), formatResetIn(u.SevenDay.ResetsAt, now)),
 	}
 	legacyModels := map[string]bool{}
 	if u.SevenDayOpus != nil {
-		lines = append(lines, fmt.Sprintf("Weekly Opus: %d%% · %s", pct(u.SevenDayOpus.Utilization), formatResetIn(u.SevenDayOpus.ResetsAt, now)))
+		lines = append(lines, usageRow("Weekly Opus", pct(u.SevenDayOpus.Utilization), formatResetIn(u.SevenDayOpus.ResetsAt, now)))
 		legacyModels["Opus"] = true
 	}
 	if u.SevenDaySonnet != nil {
-		lines = append(lines, fmt.Sprintf("Weekly Sonnet: %d%% · %s", pct(u.SevenDaySonnet.Utilization), formatResetIn(u.SevenDaySonnet.ResetsAt, now)))
+		lines = append(lines, usageRow("Weekly Sonnet", pct(u.SevenDaySonnet.Utilization), formatResetIn(u.SevenDaySonnet.ResetsAt, now)))
 		legacyModels["Sonnet"] = true
 	}
 	for _, s := range u.WeeklyScoped {
 		if legacyModels[s.Model] { // legacy field already rendered this model
 			continue
 		}
-		lines = append(lines, fmt.Sprintf("Weekly %s: %d%% · %s", s.Model, pct(s.Window.Utilization), formatResetIn(s.Window.ResetsAt, now)))
+		lines = append(lines, usageRow("Weekly "+s.Model, pct(s.Window.Utilization), formatResetIn(s.Window.ResetsAt, now)))
 	}
 	if model != nil {
 		lines = append(lines, fmt.Sprintf("Current model: %s (%s)", model.Name, model.ID))
@@ -232,9 +232,9 @@ func detailLines(u *usageResp, model *currentModel) []string {
 
 func codexDetailLines(u *codexUsage, model *currentModel) []string {
 	now := time.Now()
-	lines := []string{fmt.Sprintf("5h: %d%% · %s", u.FiveHour.UsedPercent, formatResetIn(u.FiveHour.ResetsAt, now))}
+	lines := []string{usageRow("5h", u.FiveHour.UsedPercent, formatResetIn(u.FiveHour.ResetsAt, now))}
 	if u.Weekly != nil {
-		lines = append(lines, fmt.Sprintf("Weekly: %d%% · %s", u.Weekly.UsedPercent, formatResetIn(u.Weekly.ResetsAt, now)))
+		lines = append(lines, usageRow("Weekly", u.Weekly.UsedPercent, formatResetIn(u.Weekly.ResetsAt, now)))
 	}
 	if model != nil {
 		lines = append(lines, fmt.Sprintf("Current model: %s (%s)", model.Name, model.ID))
