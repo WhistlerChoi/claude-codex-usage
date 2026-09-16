@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -65,5 +66,27 @@ func TestShouldShowStale(t *testing.T) {
 	}
 	if !shouldShowStale(900*time.Second, interval) {
 		t.Error("900s should be stale")
+	}
+}
+
+func TestUsageRow(t *testing.T) {
+	// The reset time goes into the tab-aligned right column, which Windows renders as the
+	// native accelerator column. Everything before the tab stays one left-aligned run.
+	got := usageRow("5h", 41, "resets in 2h 17m")
+	if got != "5h: 41%\tresets in 2h 17m" {
+		t.Fatalf("unexpected row: %q", got)
+	}
+	// Exactly one tab per row, or Windows splits the line at the wrong place.
+	if strings.Count(got, "\t") != 1 {
+		t.Fatalf("expected exactly one tab, got %q", got)
+	}
+	// A single-digit percent must not be padded: the tab does the aligning, and padding
+	// with spaces in a proportional font only makes the column ragged.
+	if got := usageRow("5h", 0, "resets in 4h 59m"); got != "5h: 0%\tresets in 4h 59m" {
+		t.Fatalf("unexpected single-digit row: %q", got)
+	}
+	// An unknown reset time still produces a well-formed row, never a dangling tab.
+	if got := usageRow("Weekly", 6, ""); got != "Weekly: 6%" {
+		t.Fatalf("unexpected row with no reset: %q", got)
 	}
 }
