@@ -44,10 +44,19 @@ Cx 20% ▮▮▯▯▯
 - Shows Codex 5-hour and weekly limits, including the reset time for each window
 - Detects the current Claude model from the latest local session transcript
 - Refreshes automatically every five minutes by default, with `Refresh Now` for an immediate update
+- Offers an optional `Auto Wakeup` switch that keeps the 5-hour row from going blank when the window has no recorded activity (off by default; see below)
 - Refreshes Claude OAuth credentials automatically and keeps the result synchronized with Claude Code's credential store
 - Preserves the last successful value during transient failures, marks it stale, and retries with backoff
 - Offers provider-specific login actions only when credentials are missing or authentication has expired
 - Includes `About` and `Quit`, and runs without a Dock icon
+
+### Auto Wakeup (optional, off by default)
+
+When you have not used Claude Code during the current 5-hour window, the usage API omits that window's reset time and the `5h` row falls back to `—` with no countdown. Switching `Auto Wakeup` on in the dropdown makes Pulse send one minimal request in that state (about 9 tokens) so a reset time is reported again.
+
+It spends a small amount of real quota automatically, so it stays off until you turn it on. Note that Claude's 5-hour window is clock-aligned — it rolls over on the hour whether or not anything is sent — so Auto Wakeup only restores the missing reset time and cannot start a window earlier. A failed wakeup never disturbs the displayed values and never triggers a login prompt. Codex is not covered yet.
+
+See the [macOS menu-bar documentation](menubar/README.md#auto-wakeup) for the guards against repeat sends and the `defaults` escape hatch.
 
 ### Authentication and privacy
 
