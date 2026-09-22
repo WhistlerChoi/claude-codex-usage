@@ -46,6 +46,20 @@ swift build -c release
 
 To quit: click the menu-bar icon → `Quit` (or `pkill -f Pulse`).
 
+### Diagnostic flags
+
+Each of these prints or renders once and exits, without starting the menu-bar item:
+
+| Flag | What it does |
+|---|---|
+| `--once` | Print the current Claude values |
+| `--codex-once` | Print the current Codex values |
+| `--selftest` | Run the unit tests (pure functions: formatting, credentials, usage parsing, Auto Wakeup). Exits non-zero on failure — this is the project's test command |
+| `--menu <out.png>` | Render the dropdown offscreen to a PNG (column-alignment regression check) |
+| `--dark` | Combined with `--menu`, renders under the dark appearance so colour choices can be checked in both themes |
+| `--about` | Render the About window to a PNG |
+| `--render <out.png>` | Render just the menu-bar title image |
+
 ## Distribution (signing & notarization)
 
 > See [docs/RELEASE.md](docs/RELEASE.md) for the full pre-deployment checklist and the
