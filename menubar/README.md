@@ -125,6 +125,36 @@ or run `/logout` followed by `/login` inside Claude Code, which recreates the it
 If a "wants to access" dialog ever does appear, click **Always Allow** — plain "Allow"
 grants access once and the dialog returns on the next poll.
 
+## Auto Wakeup
+
+**Off by default.** Toggle it with the switch on the menu's "Auto Wakeup" row; the setting
+persists across restarts. Once it has fired, the row also shows the time of the last attempt.
+
+When no activity has been recorded in the current 5-hour window, the API omits `resets_at` and
+the 5h row shows "reset time unknown" / "—" instead of a countdown. With Auto Wakeup on, Pulse
+sends **one minimal request** in that state (Claude: `POST /v1/messages`, Haiku, `max_tokens: 1`
+— about 9 tokens) so the provider starts reporting a reset time again and the row stays populated.
+
+Things worth knowing before enabling it:
+
+- **It consumes real quota.** The amount is tiny, but it is not zero, and it is sent
+  automatically without further confirmation.
+- Claude's 5-hour window is **clock-aligned** (it resets on the hour regardless of activity), so a
+  successful wakeup keeps the row populated until the next boundary — at most one request per
+  5 hours. A wakeup does **not** move the window boundary earlier; nothing can.
+- A wakeup never affects the display: if it fails, the usage values stay as they were and no
+  login prompt appears.
+- **Codex is not wired up yet.** `sendCodexWakeup()` reports `notConfigured` because the request
+  shape for ChatGPT's completion backend has not been confirmed; the toggle currently affects
+  Claude only.
+
+Escape hatch (the app must not be running):
+
+```bash
+defaults write com.wemeet.pulse AutoWakeupEnabled -bool false   # force off
+defaults delete com.wemeet.pulse AutoWakeupEnabled              # back to the default (off)
+```
+
 ## Settings / fine-tuning
 
 The two-line display is drawn into an image sized to the menu-bar height. If the line positions do not align with neighboring items, adjust the values below.
