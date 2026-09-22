@@ -25,6 +25,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var codexLoginNeeded = false
     private var codexInFlight = false
 
+    // Auto Wakeup: off unless the user turns it on. State is persisted so quitting and
+    // relaunching cannot reset the cooldown and re-send.
+    private var autoWakeupEnabled: Bool
+    private var claudeWakeup = WakeupState()
+    private var codexWakeup = WakeupState()
+    private var claudeWakeupInFlight = false
+    private var codexWakeupInFlight = false
+
     // Two-line display fine-tuning (adjustable via env vars, no rebuild needed)
     private let fontSize: CGFloat       // CLAUDE_USAGE_FONT_SIZE (default 9)
     private let lineGap: CGFloat        // CLAUDE_USAGE_LINE_GAP  (center-to-center gap of the two lines, default 10)
@@ -46,7 +54,100 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         yOffset = CGFloat(num("CLAUDE_USAGE_Y_OFFSET", "YOffset", 0))
         fontWeight = NSFont.Weight(
             num("CLAUDE_USAGE_FONT_WEIGHT", "FontWeight", Double(NSFont.Weight.bold.rawValue)))
+        // An absent key reads as false, which is the required default-off.
+        autoWakeupEnabled = defaults.bool(forKey: "AutoWakeupEnabled")
         super.init()
+        claudeWakeup = Self.loadWakeupState(provider: "claude")
+        codexWakeup = Self.loadWakeupState(provider: "codex")
+    }
+
+    private static func loadWakeupState(provider: String) -> WakeupState {
+        let d = UserDefaults.standard
+        func date(_ key: String) -> Date? {
+            let v = d.double(forKey: key)
+            return v > 0 ? Date(timeIntervalSince1970: v) : nil
+        }
+        return WakeupState(
+            lastWakeupAt: date("AutoWakeupLastAt.\(provider)"),
+            lastWindowResetsAt: date("AutoWakeupLastWindow.\(provider)"))
+    }
+
+    private func saveWakeupState(_ state: WakeupState, provider: String) {
+        let d = UserDefaults.standard
+        d.set(state.lastWakeupAt?.timeIntervalSince1970 ?? 0, forKey: "AutoWakeupLastAt.\(provider)")
+        d.set(state.lastWindowResetsAt?.timeIntervalSince1970 ?? 0,
+              forKey: "AutoWakeupLastWindow.\(provider)")
+    }
+
+    /// Evaluate and, if warranted, send one wakeup. Called only from a successful poll, on the
+    /// main actor. Every failure path here is silent: a wakeup must never touch the usage
+    /// display, and must never be reported as a login problem.
+    private func maybeWakeUpClaude(resetsAt: String?) {
+        let parsed = resetsAt.flatMap(parseISODate)
+        if let parsed { claudeWakeup.lastWindowResetsAt = parsed }
+        guard shouldWakeUp(enabled: autoWakeupEnabled, resetsAt: parsed,
+                           state: claudeWakeup, inFlight: claudeWakeupInFlight) else {
+            saveWakeupState(claudeWakeup, provider: "claude")
+            return
+        }
+        claudeWakeupInFlight = true
+        // Recorded before the request goes out, so a crash mid-flight still costs the cooldown.
+        claudeWakeup = stateAfterWakeup(claudeWakeup, resetsAt: parsed)
+        saveWakeupState(claudeWakeup, provider: "claude")
+        Task.detached { [weak self] in
+            do {
+                try await sendClaudeWakeup()
+            } catch {
+                FileHandle.standardError.write(
+                    "pulse: claude wakeup failed: \(error)\n".data(using: .utf8)!)
+            }
+            await MainActor.run { self?.claudeWakeupInFlight = false }
+        }
+    }
+
+    private func maybeWakeUpCodex(resetsAt: Date?) {
+        if let resetsAt { codexWakeup.lastWindowResetsAt = resetsAt }
+        guard shouldWakeUp(enabled: autoWakeupEnabled, resetsAt: resetsAt,
+                           state: codexWakeup, inFlight: codexWakeupInFlight) else {
+            saveWakeupState(codexWakeup, provider: "codex")
+            return
+        }
+        codexWakeupInFlight = true
+        codexWakeup = stateAfterWakeup(codexWakeup, resetsAt: resetsAt)
+        saveWakeupState(codexWakeup, provider: "codex")
+        Task.detached { [weak self] in
+            do {
+                try await sendCodexWakeup()
+            } catch {
+                FileHandle.standardError.write(
+                    "pulse: codex wakeup failed: \(error)\n".data(using: .utf8)!)
+            }
+            await MainActor.run { self?.codexWakeupInFlight = false }
+        }
+    }
+
+    /// Sent by the row's NSSwitch, which has *already* flipped its own state. Read that state
+    /// rather than toggling again, or the model ends up inverted relative to the control.
+    @objc func toggleAutoWakeup(_ sender: Any?) {
+        if let sw = sender as? NSSwitch {
+            autoWakeupEnabled = (sw.state == .on)
+        } else {
+            autoWakeupEnabled.toggle()  // keyboard/menu invocation with no control attached
+        }
+        UserDefaults.standard.set(autoWakeupEnabled, forKey: "AutoWakeupEnabled")
+        // The menu is open right now, and rebuilding it does not touch the visible copy, so
+        // repaint this row's own view in place.
+        refreshAutoWakeupRow()
+    }
+
+    /// Update the live Auto Wakeup row (label colour and text) without rebuilding the menu.
+    /// Rebuilding would leave the currently-open menu untouched.
+    private func refreshAutoWakeupRow() {
+        guard let menu = statusItem?.menu else { return }
+        for item in menu.items {
+            guard let view = item.view, view.identifier == autoWakeupRowIdentifier else { continue }
+            updateAutoWakeupView(view, enabled: autoWakeupEnabled, state: claudeWakeup)
+        }
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -74,6 +175,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 await MainActor.run {
                     self.inFlight = false
                     self.renderUsage(usage, model)
+                    self.maybeWakeUpClaude(resetsAt: usage.fiveHour.resetsAt)
                     self.lastSuccessAt = Date()
                     self.consecutiveFailures = 0
                     self.scheduleNext(self.interval)
@@ -98,6 +200,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 await MainActor.run {
                     self.codexInFlight = false
                     self.renderCodexUsage(usage, model)
+                    self.maybeWakeUpCodex(resetsAt: usage.fiveHour.resetsAt)
                     self.scheduleNextCodex(self.interval)
                 }
             } catch {
@@ -181,8 +284,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
+        // Unbundled (e.g. `swift run`) there is no Info.plist; "dev" beats a stale literal that
+        // silently drifts behind the real version.
         let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString")
-            as? String ?? "1.2.2"
+            as? String ?? "dev"
 
         let win = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 460, height: 380),
@@ -625,6 +730,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         to menu: NSMenu, showLogin: Bool, showCodexLogin: Bool, updatedAt: Date? = nil
     ) {
         menu.addItem(.separator())
+        menu.addItem(makeAutoWakeupItem(
+            enabled: autoWakeupEnabled, state: claudeWakeup,
+            target: self, action: #selector(toggleAutoWakeup(_:))))
+        menu.addItem(.separator())
         if showLogin {
             let loginItem = NSMenuItem(
                 title: "Log In via Claude Code", action: #selector(login), keyEquivalent: "l")
@@ -686,6 +795,108 @@ func makeNoteItem(_ line: String) -> NSMenuItem {
 
 /// Section header for one provider's usage table, hosted in a custom view so the current
 /// model can sit flush at the right edge: `[icon] Claude …………… Opus (claude-opus-5)`.
+let autoWakeupRowIdentifier = NSUserInterfaceItemIdentifier("autoWakeupRow")
+let autoWakeupStatusIdentifier = NSUserInterfaceItemIdentifier("autoWakeupStatus")
+let autoWakeupDetailIdentifier = NSUserInterfaceItemIdentifier("autoWakeupDetail")
+let autoWakeupSwitchIdentifier = NSUserInterfaceItemIdentifier("autoWakeupSwitch")
+
+/// Repaint an existing Auto Wakeup row in place. An open NSMenu keeps showing the views it was
+/// built with, so flipping the switch has to update those views rather than rebuild the menu.
+func updateAutoWakeupView(_ view: NSView, enabled: Bool, state: WakeupState, now: Date = Date()) {
+    for sub in view.subviews {
+        switch sub.identifier {
+        case autoWakeupStatusIdentifier?:
+            guard let field = sub as? NSTextField else { continue }
+            field.stringValue = wakeupStateLabel(enabled: enabled)
+            field.textColor = enabled ? .systemGreen : .tertiaryLabelColor
+        case autoWakeupDetailIdentifier?:
+            guard let field = sub as? NSTextField else { continue }
+            field.stringValue = wakeupRowDetail(enabled: enabled, state: state, now: now)
+        case autoWakeupSwitchIdentifier?:
+            // Keep the control in sync when the change came from somewhere other than a click.
+            (sub as? NSSwitch)?.state = enabled ? .on : .off
+        default:
+            continue
+        }
+    }
+}
+
+/// Single-row Auto Wakeup control: label on the left, an NSSwitch pinned to the right edge.
+/// Replaces the old two-line (checkmark item + note line) form. The status text rides along as a
+/// de-emphasised suffix so the row still says when it last fired without costing a second line.
+/// A free function, like the other menu-view builders, so `--menu` can render it headlessly.
+func makeAutoWakeupView(
+    enabled: Bool, state: WakeupState, target: AnyObject?, action: Selector?, now: Date = Date()
+) -> NSView {
+    let leading: CGFloat = 14   // align with the provider header / table rows
+    let trailing: CGFloat = 14
+    let vPad: CGFloat = 3
+    let font = NSFont.menuFont(ofSize: 0)
+
+    let title = NSTextField(labelWithString: "Auto Wakeup")
+    title.font = font
+    title.textColor = .labelColor
+
+    // The switch alone reads ambiguously in a menu (its accent-blue "on" fill is close in weight
+    // to the grey "off" track), so the state is also stated in words and in colour.
+    let status = NSTextField(labelWithString: wakeupStateLabel(enabled: enabled))
+    status.font = NSFont.menuFont(ofSize: 0)
+    status.textColor = enabled ? .systemGreen : .tertiaryLabelColor
+
+    let detail = NSTextField(labelWithString: wakeupRowDetail(enabled: enabled, state: state, now: now))
+    detail.font = font
+    detail.textColor = .secondaryLabelColor
+
+    let toggle = NSSwitch()
+    toggle.state = enabled ? .on : .off
+    toggle.target = target
+    toggle.action = action
+    // Keep the switch at its natural size; only the gap before it should absorb extra width.
+    toggle.setContentHuggingPriority(.required, for: .horizontal)
+    toggle.setContentCompressionResistancePriority(.required, for: .horizontal)
+
+    let container = NSView()
+    container.identifier = autoWakeupRowIdentifier
+    status.identifier = autoWakeupStatusIdentifier
+    detail.identifier = autoWakeupDetailIdentifier
+    toggle.identifier = autoWakeupSwitchIdentifier
+    for v in [title, detail, status, toggle] as [NSView] {
+        v.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(v)
+    }
+
+    NSLayoutConstraint.activate([
+        title.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: leading),
+        title.centerYAnchor.constraint(equalTo: container.centerYAnchor),
+        detail.leadingAnchor.constraint(equalTo: title.trailingAnchor, constant: 8),
+        detail.centerYAnchor.constraint(equalTo: container.centerYAnchor),
+        status.leadingAnchor.constraint(greaterThanOrEqualTo: detail.trailingAnchor, constant: 12),
+        status.trailingAnchor.constraint(equalTo: toggle.leadingAnchor, constant: -6),
+        status.centerYAnchor.constraint(equalTo: container.centerYAnchor),
+        toggle.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -trailing),
+        toggle.centerYAnchor.constraint(equalTo: container.centerYAnchor),
+        container.heightAnchor.constraint(
+            greaterThanOrEqualTo: toggle.heightAnchor, constant: 2 * vPad),
+    ])
+
+    // Same frame-based handoff as makeProviderHeaderView: NSMenu sets the view's frame directly
+    // to widen it, which never reaches the subviews while Auto Layout still owns them.
+    let fitting = container.fittingSize
+    container.translatesAutoresizingMaskIntoConstraints = true
+    container.autoresizingMask = [.width]
+    container.frame = NSRect(origin: .zero, size: fitting)
+    return container
+}
+
+func makeAutoWakeupItem(
+    enabled: Bool, state: WakeupState, target: AnyObject?, action: Selector?
+) -> NSMenuItem {
+    let item = NSMenuItem()
+    item.isEnabled = true
+    item.view = makeAutoWakeupView(enabled: enabled, state: state, target: target, action: action)
+    return item
+}
+
 func makeProviderHeaderItem(_ provider: Provider, model: CurrentModel?) -> NSMenuItem {
     let item = NSMenuItem()
     item.isEnabled = true
@@ -1314,6 +1525,125 @@ if CommandLine.arguments.contains("--selftest") {
     check(latestDate(d1, nil) == d1 && latestDate(nil, d2) == d2, "latestDate passes through a lone date")
     check(latestDate(nil, nil) == nil, "latestDate nil,nil -> nil")
 
+    // --- Auto Wakeup -------------------------------------------------------
+    // The 5h window is clock-aligned (verified: resets_at lands on the hour), so a missing
+    // resets_at means "no activity recorded in this window yet", not "window expired".
+    // That absence is exactly what leaves the 5h row showing "reset time unknown" / "—".
+
+    // needsWakeup: fires only when the reset time is genuinely absent.
+    check(needsWakeup(resetsAt: nil as Date?, now: t0), "needsWakeup: nil reset -> true")
+    check(!needsWakeup(resetsAt: t0.addingTimeInterval(3600), now: t0),
+          "needsWakeup: future reset -> false (row already shows a time)")
+    check(!needsWakeup(resetsAt: t0.addingTimeInterval(-3600), now: t0),
+          "needsWakeup: past reset -> false (only absence triggers, per design)")
+    check(needsWakeup(resetsAt: nil as String?, now: t0), "needsWakeup: nil string -> true")
+    check(needsWakeup(resetsAt: "garbage", now: t0),
+          "needsWakeup: unparsable reset -> true (displays as unknown, so treat as absent)")
+    check(!needsWakeup(resetsAt: "2023-11-14T23:13:20Z", now: t0),
+          "needsWakeup: parsable future string -> false")
+
+    // shouldWakeUp: the guard chain. Cooldown is the backstop if the predicate is ever wrong.
+    let emptyState = WakeupState()
+    check(shouldWakeUp(enabled: true, resetsAt: nil as Date?, state: emptyState,
+                       inFlight: false, now: t0),
+          "shouldWakeUp: enabled + absent reset -> fires")
+    check(!shouldWakeUp(enabled: false, resetsAt: nil as Date?, state: emptyState,
+                        inFlight: false, now: t0),
+          "shouldWakeUp: disabled never fires")
+    check(!shouldWakeUp(enabled: true, resetsAt: nil as Date?, state: emptyState,
+                        inFlight: true, now: t0),
+          "shouldWakeUp: never fires while a request is in flight")
+    check(!shouldWakeUp(enabled: true, resetsAt: t0.addingTimeInterval(3600), state: emptyState,
+                        inFlight: false, now: t0),
+          "shouldWakeUp: reset time present -> does not fire")
+
+    let justFired = WakeupState(lastWakeupAt: t0.addingTimeInterval(-60), lastWindowResetsAt: nil)
+    check(!shouldWakeUp(enabled: true, resetsAt: nil as Date?, state: justFired,
+                        inFlight: false, now: t0),
+          "shouldWakeUp: cooldown blocks a second attempt")
+    let cooledDown = WakeupState(
+        lastWakeupAt: t0.addingTimeInterval(-wakeupCooldown - 1), lastWindowResetsAt: nil)
+    check(shouldWakeUp(enabled: true, resetsAt: nil as Date?, state: cooledDown,
+                       inFlight: false, now: t0),
+          "shouldWakeUp: fires again once the cooldown has elapsed")
+
+    // stateAfterWakeup: recorded at attempt start so a crash mid-request still costs the cooldown.
+    check(stateAfterWakeup(emptyState, resetsAt: nil, now: t0).lastWakeupAt == t0,
+          "stateAfterWakeup records the attempt time")
+    check(stateAfterWakeup(emptyState, resetsAt: t0.addingTimeInterval(5 * 3600), now: t0)
+            .lastWindowResetsAt == t0.addingTimeInterval(5 * 3600),
+          "stateAfterWakeup records the observed window")
+
+    // wakeupStatusLine: English only, per CLAUDE.md.
+    check(wakeupStatusLine(enabled: false, state: emptyState, now: t0) == "Auto Wakeup: off",
+          "wakeupStatusLine disabled")
+    check(wakeupStatusLine(enabled: true, state: emptyState, now: t0) == "Auto Wakeup: on",
+          "wakeupStatusLine enabled, never fired")
+    check(wakeupStatusLine(enabled: true, state: WakeupState(lastWakeupAt: t0,
+                                                             lastWindowResetsAt: nil), now: t0)
+            .hasPrefix("Auto Wakeup: last "),
+          "wakeupStatusLine shows the last attempt time")
+
+    // wakeupRowDetail: the single-row control's suffix. The switch shows on/off, so the text
+    // must not repeat it — only a fired-at time earns space.
+    check(wakeupRowDetail(enabled: false, state: emptyState, now: t0) == "",
+          "wakeupRowDetail disabled -> empty (switch already shows off)")
+    check(wakeupRowDetail(enabled: true, state: emptyState, now: t0) == "",
+          "wakeupRowDetail enabled but never fired -> empty")
+    check(wakeupRowDetail(enabled: true,
+                          state: WakeupState(lastWakeupAt: t0, lastWindowResetsAt: nil), now: t0)
+            == "last " + clockString(t0),
+          "wakeupRowDetail shows the last attempt time")
+    check(wakeupRowDetail(enabled: false,
+                          state: WakeupState(lastWakeupAt: t0, lastWindowResetsAt: nil), now: t0)
+            == "",
+          "wakeupRowDetail disabled hides a stale time")
+    check(wakeupStateLabel(enabled: true) == "On" && wakeupStateLabel(enabled: false) == "Off",
+          "wakeupStateLabel spells the state out (colour is not the only cue)")
+
+    // The row's views must actually repaint in place: an open NSMenu keeps the views it was
+    // built with, so rebuilding the menu would leave a click looking like it did nothing.
+    let liveRow = makeAutoWakeupView(enabled: false, state: WakeupState(), target: nil, action: nil)
+    func rowText(_ id: NSUserInterfaceItemIdentifier) -> String {
+        for sub in liveRow.subviews where sub.identifier == id {
+            if let f = sub as? NSTextField { return f.stringValue }
+        }
+        return "<missing>"
+    }
+    func rowSwitchOn() -> Bool {
+        for sub in liveRow.subviews where sub.identifier == autoWakeupSwitchIdentifier {
+            if let sw = sub as? NSSwitch { return sw.state == .on }
+        }
+        return false
+    }
+    check(rowText(autoWakeupStatusIdentifier) == "Off" && !rowSwitchOn(),
+          "auto wakeup row starts off")
+    updateAutoWakeupView(liveRow, enabled: true,
+                         state: WakeupState(lastWakeupAt: t0, lastWindowResetsAt: nil), now: t0)
+    check(rowText(autoWakeupStatusIdentifier) == "On" && rowSwitchOn(),
+          "updateAutoWakeupView flips the row to on in place")
+    check(rowText(autoWakeupDetailIdentifier) == "last " + clockString(t0),
+          "updateAutoWakeupView refreshes the last-fired time")
+    updateAutoWakeupView(liveRow, enabled: false, state: WakeupState(), now: t0)
+    check(rowText(autoWakeupStatusIdentifier) == "Off" && !rowSwitchOn()
+            && rowText(autoWakeupDetailIdentifier) == "",
+          "updateAutoWakeupView flips the row back to off in place")
+
+    // The bug this guards: NSSwitch flips its own state *before* sending the action, so a
+    // handler that also toggles ends up inverted — the model says off while the switch shows on.
+    // Replay a real click by setting the control's state first, then dispatching, exactly as
+    // AppKit does.
+    func modelAfterClick(startingEnabled: Bool) -> Bool {
+        let sw = NSSwitch()
+        sw.state = startingEnabled ? .on : .off
+        sw.performClick(nil)          // AppKit flips the control here
+        return sw.state == .on        // ...and this is what the handler must adopt verbatim
+    }
+    check(modelAfterClick(startingEnabled: false) == true,
+          "a click from off leaves the switch on (handler must adopt, not re-toggle)")
+    check(modelAfterClick(startingEnabled: true) == false,
+          "a click from on leaves the switch off")
+
     print(failures == 0 ? "ALL PASS" : "\(failures) FAILURE(S)")
     exit(failures == 0 ? 0 : 1)
 }
@@ -1369,7 +1699,11 @@ if let idx = CommandLine.arguments.firstIndex(of: "--about") {
     let outPath = CommandLine.arguments.indices.contains(idx + 1)
         ? CommandLine.arguments[idx + 1] : NSTemporaryDirectory() + "about.png"
     let size = NSSize(width: 460, height: 340)
-    let view = AppDelegate().makeAboutContentView(version: "0.1.0")
+    // Read the real bundle version, as the About menu item does — a render that shows a made-up
+    // version cannot catch a version regression.
+    let renderVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString")
+        as? String ?? "dev"
+    let view = AppDelegate().makeAboutContentView(version: renderVersion)
     view.frame = NSRect(origin: .zero, size: size)
     view.wantsLayer = true
     view.layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
@@ -1388,6 +1722,11 @@ if let idx = CommandLine.arguments.firstIndex(of: "--about") {
 if let idx = CommandLine.arguments.firstIndex(of: "--menu") {
     let outPath = CommandLine.arguments.indices.contains(idx + 1)
         ? CommandLine.arguments[idx + 1] : NSTemporaryDirectory() + "menu.png"
+    // `--dark` renders the same layout under the dark appearance, so colour choices can be
+    // checked in both themes without flipping the whole system.
+    if CommandLine.arguments.contains("--dark"), let dark = NSAppearance(named: .darkAqua) {
+        NSAppearance.current = dark
+    }
     // Two sections, as the real menu builds them — a wide-label/3-digit Claude block over a
     // narrow-label/1-digit Codex block. That is the case that used to misalign, so this render
     // is a genuine regression check: the two blocks' `%` right edge and `· resets in` left edge
@@ -1414,6 +1753,16 @@ if let idx = CommandLine.arguments.firstIndex(of: "--menu") {
         makeUsageTableView(rows: claudeRows, columnWidths: widths, captionResetColumn: true),
         makeProviderHeaderView(.codex, model: CurrentModel(id: "gpt-5.6-terra", name: "GPT-5.6-Terra")),
         makeUsageTableView(rows: codexRows, columnWidths: widths),
+        // The Auto Wakeup row: its switch must sit at the same right edge as the tables' reset
+        // column once every view is stretched to the menu width.
+        makeAutoWakeupView(
+            enabled: true,
+            state: WakeupState(lastWakeupAt: Date(timeIntervalSince1970: 1_700_000_000),
+                               lastWindowResetsAt: nil),
+            target: nil, action: nil),
+        // Both states in one render: the On/Off badge and the switch must stay legible and
+        // right-aligned in either, and in both light and dark (`--dark`).
+        makeAutoWakeupView(enabled: false, state: WakeupState(), target: nil, action: nil),
     ]
 
     // Stack top-down at the same origin x and stretch every row to the widest one, as the menu does.

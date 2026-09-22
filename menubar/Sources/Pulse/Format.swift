@@ -10,7 +10,7 @@ func menuBarText(_ usage: UsageData) -> String {
     "\(pct(usage.fiveHour.utilization))% · \(pct(usage.sevenDay.utilization))%"
 }
 
-private func parseISODate(_ s: String) -> Date? {
+func parseISODate(_ s: String) -> Date? {
     let withFrac = ISO8601DateFormatter()
     withFrac.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
     if let d = withFrac.date(from: s) { return d }

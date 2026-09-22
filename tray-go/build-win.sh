@@ -2,7 +2,7 @@
 # Cross-compile Pulse.exe for Windows on macOS/Linux (no Wine needed).
 set -euo pipefail
 cd "$(dirname "$0")"
-version="${1:-1.4.1}"
+version="${1:-1.4.2}"
 
 echo "Generating installer icon..."
 GOOS= GOARCH= CGO_ENABLED= go run . --render-ico installer/Pulse.ico

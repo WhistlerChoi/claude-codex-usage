@@ -27,6 +27,20 @@ In the dropdown each provider header shows its current model at the right edge, 
 last-updated time (the later of the two providers' last successful polls) rides on the
 `Refresh Now` item in a smaller font rather than sitting under either provider's section.
 
+`menubar/` also contains `AutoWakeup.swift` (**menubar-only, deliberately not mirrored** to
+`src/`/`tray-go/`, like the Codex provider). Off by default. When the current 5h window has no
+recorded activity the API omits `resets_at` and the 5h row degrades to "reset time unknown"/"—";
+with the toggle on, Pulse sends one minimal `POST /v1/messages` (Haiku, `max_tokens: 1`) so a
+reset time is reported again. Two facts that constrain any change here: the Claude 5h window is
+**clock-aligned** (it resets on the hour whether or not anything is sent, so a wakeup can never
+move the boundary earlier — it only repopulates `resets_at`), and Codex's window is *not*
+clock-aligned. The trigger is **absence of `resets_at` only** — never `utilization == 0`, since an
+active window rounds to 0% and would re-fire every poll. Guards (persisted across restarts, so a
+relaunch loop cannot re-send): 30-minute cooldown, in-flight flag, state recorded *before* the
+request. The wakeup path has no access to the display layer by construction, satisfying the error
+contract below. `sendCodexWakeup()` throws `.notConfigured` until the chatgpt.com request shape is
+confirmed — do not guess it.
+
 ## Shared architecture (same 4 modules in every implementation)
 
 1. **credentials** — read the OAuth `accessToken` from `~/.claude/.credentials.json` (JSON path `claudeAiOauth.accessToken`, fallback `accessToken`) **and**, on macOS, keychain item `Claude Code-credentials`. **Freshest wins** — see below. Re-read every poll so Claude Code's token refresh is picked up automatically.

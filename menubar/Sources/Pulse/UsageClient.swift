@@ -160,7 +160,9 @@ private func usageError(forFailedRefresh error: Error) -> UsageError {
 /// Fetch usage, transparently refreshing the OAuth token when it is expired or rejected.
 /// This is what lets Pulse recover after a boot without a manual `claude` login: the access
 /// token (~8h life) is refreshed from the stored refresh token, exactly as Claude Code does.
-func fetchUsageAutoRefreshing() async throws -> UsageData {
+/// Credentials that are safe to spend a request on, refreshing first when at/near expiry.
+/// Extracted so every caller that needs a token shares one copy of the expiry rules.
+private func currentCredentials() async throws -> Credentials {
     var creds = try readCredentials()
     // A refresh whose writeback failed lives only in memory; prefer it over the stores' older copy.
     if let cached = RefreshedCredentialsCache.shared.fresherThan(creds) {
@@ -183,6 +185,17 @@ func fetchUsageAutoRefreshing() async throws -> UsageData {
             throw UsageError.auth  // expired with no refresh token: only a login can fix this
         }
     }
+    return creds
+}
+
+/// A token that is safe to send right now. Same discipline as `fetchUsageAutoRefreshing`;
+/// callers must not re-implement the expiry handling.
+func currentAccessToken() async throws -> String {
+    try await currentCredentials().accessToken
+}
+
+func fetchUsageAutoRefreshing() async throws -> UsageData {
+    let creds = try await currentCredentials()
 
     do {
         return try await fetchUsage(token: creds.accessToken)
