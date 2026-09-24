@@ -55,7 +55,7 @@ wix eula accept wix7
 Build the EXE and installer together:
 
 ```powershell
-.\build-msi.ps1                 # → Pulse-1.4.2-x64.msi
+.\build-msi.ps1                 # → Pulse-1.4.3-x64.msi
 ```
 
 The installer adds a Start menu shortcut and, after a new installation, shows a checked
