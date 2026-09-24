@@ -159,7 +159,10 @@ Things worth knowing before enabling it:
   5 hours. A wakeup does **not** move the window boundary earlier; nothing can.
 - A wakeup never affects the display: if it fails, the usage values stay as they were and no
   login prompt appears.
-- **Codex** uses the same rule. In the same idle state it sends one minimal turn to
+- **Codex** signals the idle state differently: its reset time never goes missing. An idle window
+  instead reports a rolling "now + 5h" reset (`reset_after_seconds == limit_window_seconds`),
+  which is why the row shows "4h 59m" while nothing is in use. Pulse treats that as the idle state
+  and sends one minimal turn to
   `POST https://chatgpt.com/backend-api/codex/responses` (the endpoint Codex itself uses) with a
   `"."` prompt and empty instructions, on the current Codex model (fallback: the first listed model
   in `models_cache.json`). Claude and Codex keep separate cooldowns, and the row's "last" time

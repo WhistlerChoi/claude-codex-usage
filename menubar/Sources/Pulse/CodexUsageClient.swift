@@ -3,6 +3,10 @@ import Foundation
 struct CodexUsageWindow {
     let usedPercent: Int
     let resetsAt: Date?
+    /// No activity yet in this window. Codex never omits the reset time the way Claude does:
+    /// an idle window reports a rolling "now + full window" reset, so absence cannot be the
+    /// signal. Auto Wakeup keys off this instead.
+    var idle: Bool = false
 }
 
 struct CodexUsage {
@@ -49,11 +53,13 @@ private struct CodexUsageResponse: Decodable {
             let usedPercent: Double?
             let resetAfterSeconds: Double?
             let resetAt: Double?
+            let limitWindowSeconds: Double?
 
             enum CodingKeys: String, CodingKey {
                 case usedPercent = "used_percent"
                 case resetAfterSeconds = "reset_after_seconds"
                 case resetAt = "reset_at"
+                case limitWindowSeconds = "limit_window_seconds"
             }
         }
 
@@ -110,6 +116,14 @@ func readCodexCredentials() throws -> CodexCredentials {
     return CodexCredentials(accessToken: token, accountId: auth.tokens?.accountId)
 }
 
+/// An idle Codex window's countdown has not started: `reset_after_seconds` equals the full
+/// `limit_window_seconds` (observed: 18000 / 18000 at 0% used). One second of slack covers
+/// server-side rounding. Either field missing → not idle, so it never triggers on a guess.
+func codexWindowIsIdle(resetAfterSeconds: Double?, limitWindowSeconds: Double?) -> Bool {
+    guard let resetAfterSeconds, let limitWindowSeconds, limitWindowSeconds > 0 else { return false }
+    return limitWindowSeconds - resetAfterSeconds <= 1
+}
+
 private func parseCodexWindow(_ window: CodexUsageResponse.RateLimit.Window?) -> CodexUsageWindow? {
     guard let window, let rawPercent = window.usedPercent else { return nil }
     let percent = min(100, max(0, Int(rawPercent.rounded())))
@@ -121,7 +135,10 @@ private func parseCodexWindow(_ window: CodexUsageResponse.RateLimit.Window?) ->
     } else {
         reset = nil
     }
-    return CodexUsageWindow(usedPercent: percent, resetsAt: reset)
+    return CodexUsageWindow(
+        usedPercent: percent, resetsAt: reset,
+        idle: codexWindowIsIdle(resetAfterSeconds: window.resetAfterSeconds,
+                                limitWindowSeconds: window.limitWindowSeconds))
 }
 
 func parseCodexUsage(_ data: Data) throws -> CodexUsage {
