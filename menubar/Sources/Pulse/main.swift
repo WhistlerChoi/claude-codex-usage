@@ -140,13 +140,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         refreshAutoWakeupRow()
     }
 
+    /// One row covers both providers, so its "last HH:MM" is the later of the two attempts.
+    private var combinedWakeupState: WakeupState {
+        WakeupState(lastWakeupAt: latestDate(claudeWakeup.lastWakeupAt, codexWakeup.lastWakeupAt),
+                    lastWindowResetsAt: nil)
+    }
+
     /// Update the live Auto Wakeup row (label colour and text) without rebuilding the menu.
     /// Rebuilding would leave the currently-open menu untouched.
     private func refreshAutoWakeupRow() {
         guard let menu = statusItem?.menu else { return }
         for item in menu.items {
             guard let view = item.view, view.identifier == autoWakeupRowIdentifier else { continue }
-            updateAutoWakeupView(view, enabled: autoWakeupEnabled, state: claudeWakeup)
+            updateAutoWakeupView(view, enabled: autoWakeupEnabled, state: combinedWakeupState)
         }
     }
 
@@ -731,7 +737,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     ) {
         menu.addItem(.separator())
         menu.addItem(makeAutoWakeupItem(
-            enabled: autoWakeupEnabled, state: claudeWakeup,
+            enabled: autoWakeupEnabled, state: combinedWakeupState,
             target: self, action: #selector(toggleAutoWakeup(_:))))
         menu.addItem(.separator())
         if showLogin {
@@ -1567,6 +1573,30 @@ if CommandLine.arguments.contains("--selftest") {
                        inFlight: false, now: t0),
           "shouldWakeUp: fires again once the cooldown has elapsed")
 
+    // Codex wakeup: request body is a minimal Responses-API user turn.
+    let codexBody = codexWakeupRequestBody(model: "gpt-x")
+    let codexInput = (codexBody["input"] as? [[String: Any]])?.first
+    let codexContent = (codexInput?["content"] as? [[String: Any]])?.first
+    check(codexBody["model"] as? String == "gpt-x"
+          && codexBody["store"] as? Bool == false && codexBody["stream"] as? Bool == true,
+          "codexWakeupRequestBody: model, store=false, stream=true")
+    check(codexInput?["role"] as? String == "user"
+          && codexContent?["type"] as? String == "input_text" && codexContent?["text"] as? String == ".",
+          "codexWakeupRequestBody: single '.' input_text user message")
+
+    // codexWakeupModel: current model wins, else first listed cache model.
+    let wakeCache = #"{"models":[{"slug":"hidden-1","visibility":"hide"},{"slug":"gpt-list","visibility":"list"},{"slug":"gpt-list-2","visibility":"list"}]}"#.data(using: .utf8)!
+    check(codexWakeupModel(current: "gpt-now", cache: wakeCache) == "gpt-now",
+          "codexWakeupModel: current model wins")
+    check(codexWakeupModel(current: nil, cache: wakeCache) == "gpt-list",
+          "codexWakeupModel: falls back to first listed model, skipping hidden")
+    check(codexWakeupModel(current: "", cache: wakeCache) == "gpt-list",
+          "codexWakeupModel: empty current treated as absent")
+    check(codexWakeupModel(current: nil, cache: nil) == nil,
+          "codexWakeupModel: no current, no cache -> nil")
+    check(codexWakeupModel(current: nil, cache: "garbage".data(using: .utf8)) == nil,
+          "codexWakeupModel: garbage cache -> nil")
+
     // stateAfterWakeup: recorded at attempt start so a crash mid-request still costs the cooldown.
     check(stateAfterWakeup(emptyState, resetsAt: nil, now: t0).lastWakeupAt == t0,
           "stateAfterWakeup records the attempt time")
@@ -1664,6 +1694,22 @@ if CommandLine.arguments.contains("--once") {
             if let model = model { print("  Model:  \(model.name) (\(model.id))") }
         } catch {
             print("Error: \(error.localizedDescription)")
+        }
+        sema.signal()
+    }
+    sema.wait()
+    exit(0)
+}
+
+// --codex-wakeup: send one Codex wakeup request and report the result (end-to-end check).
+if CommandLine.arguments.contains("--codex-wakeup") {
+    let sema = DispatchSemaphore(value: 0)
+    Task {
+        do {
+            try await sendCodexWakeup()
+            print("Codex wakeup: ok")
+        } catch {
+            print("Codex wakeup failed: \(error)")
         }
         sema.signal()
     }

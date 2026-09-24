@@ -118,10 +118,73 @@ func sendClaudeWakeup() async throws {
     guard (200..<300).contains(http.statusCode) else { throw WakeupError.failed(http.statusCode) }
 }
 
-/// Codex counterpart. The request shape for chatgpt.com's completion backend has not been
-/// confirmed, and guessing it would mean shipping a request that silently does nothing (or
-/// something unintended). Until it is captured from a real `codex exec` run, this reports
-/// `.notConfigured` and the caller treats Codex as having no wakeup path.
+/// Request body for the Codex wakeup: the Responses wire format Codex itself sends to
+/// `backend-api/codex/responses`, reduced to a one-character user turn. Pure, so it is tested.
+func codexWakeupRequestBody(model: String) -> [String: Any] {
+    [
+        "model": model,
+        "instructions": "",
+        "store": false,
+        "stream": true,
+        "input": [[
+            "type": "message",
+            "role": "user",
+            "content": [["type": "input_text", "text": "."]],
+        ]],
+    ]
+}
+
+/// Which model the Codex wakeup uses. The current Codex model (from the rollout logs) is known
+/// to be accepted for this account; otherwise the first user-visible entry of
+/// `models_cache.json`. nil when neither is available.
+func codexWakeupModel(current: String?, cache: Data?) -> String? {
+    if let current, !current.isEmpty { return current }
+    guard let cache,
+          let obj = try? JSONSerialization.jsonObject(with: cache) as? [String: Any],
+          let models = obj["models"] as? [[String: Any]] else {
+        return nil
+    }
+    for model in models where model["visibility"] as? String == "list" {
+        if let slug = model["slug"] as? String, !slug.isEmpty { return slug }
+    }
+    return nil
+}
+
+/// Codex counterpart: one minimal turn on the endpoint Codex itself uses (seen in Codex's
+/// logs as `api.path="/responses"`). Codex prefers a websocket; the plain SSE POST is its
+/// fallback transport and is what this uses. The stream is read to `response.completed` so
+/// the turn actually registers instead of being cancelled mid-flight.
+/// One attempt, no retry. Throws on any failure; the caller swallows it.
 func sendCodexWakeup() async throws {
-    throw WakeupError.notConfigured
+    let credentials = try readCodexCredentials()
+    let cache = try? Data(contentsOf: codexHome().appendingPathComponent("models_cache.json"))
+    guard let model = codexWakeupModel(current: readCurrentCodexModel()?.id, cache: cache) else {
+        throw WakeupError.notConfigured
+    }
+
+    var req = URLRequest(url: URL(string: "https://chatgpt.com/backend-api/codex/responses")!)
+    req.httpMethod = "POST"
+    req.setValue("Bearer \(credentials.accessToken)", forHTTPHeaderField: "Authorization")
+    if let accountId = credentials.accountId, !accountId.isEmpty {
+        req.setValue(accountId, forHTTPHeaderField: "ChatGPT-Account-Id")
+    }
+    req.setValue("responses=experimental", forHTTPHeaderField: "OpenAI-Beta")
+    req.setValue("codex_cli_rs", forHTTPHeaderField: "originator")
+    req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+    req.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+    req.timeoutInterval = 30
+    req.httpBody = try JSONSerialization.data(withJSONObject: codexWakeupRequestBody(model: model))
+
+    let (bytes, response) = try await URLSession.shared.bytes(for: req)
+    guard let http = response as? HTTPURLResponse else { throw WakeupError.failed(0) }
+    guard (200..<300).contains(http.statusCode) else { throw WakeupError.failed(http.statusCode) }
+
+    for try await line in bytes.lines {
+        guard line.hasPrefix("event:") || line.hasPrefix("data:") else { continue }
+        if line.contains("response.completed") { return }
+        if line.contains("response.failed") || line.contains("\"type\":\"error\"") {
+            throw WakeupError.failed(http.statusCode)
+        }
+    }
+    throw WakeupError.failed(http.statusCode)  // stream ended without completing
 }
