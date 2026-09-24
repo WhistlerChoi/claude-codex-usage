@@ -85,7 +85,7 @@ private struct CodexUsageResponse: Decodable {
     }
 }
 
-private struct CodexCredentials {
+struct CodexCredentials {
     let accessToken: String
     let accountId: String?
 }
@@ -98,7 +98,7 @@ func codexHome() -> URL {
     return FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".codex")
 }
 
-private func readCodexCredentials() throws -> CodexCredentials {
+func readCodexCredentials() throws -> CodexCredentials {
     let url = codexHome().appendingPathComponent("auth.json")
     guard let data = try? Data(contentsOf: url) else {
         throw CodexUsageError.credentialsNotFound

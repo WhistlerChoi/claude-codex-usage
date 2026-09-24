@@ -54,6 +54,7 @@ Each of these prints or renders once and exits, without starting the menu-bar it
 |---|---|
 | `--once` | Print the current Claude values |
 | `--codex-once` | Print the current Codex values |
+| `--codex-wakeup` | Send one Codex Auto Wakeup request and print the result (spends a tiny amount of Codex quota) |
 | `--selftest` | Run the unit tests (pure functions: formatting, credentials, usage parsing, Auto Wakeup). Exits non-zero on failure — this is the project's test command |
 | `--menu <out.png>` | Render the dropdown offscreen to a PNG (column-alignment regression check) |
 | `--dark` | Combined with `--menu`, renders under the dark appearance so colour choices can be checked in both themes |
@@ -158,9 +159,11 @@ Things worth knowing before enabling it:
   5 hours. A wakeup does **not** move the window boundary earlier; nothing can.
 - A wakeup never affects the display: if it fails, the usage values stay as they were and no
   login prompt appears.
-- **Codex is not wired up yet.** `sendCodexWakeup()` reports `notConfigured` because the request
-  shape for ChatGPT's completion backend has not been confirmed; the toggle currently affects
-  Claude only.
+- **Codex** uses the same rule. In the same idle state it sends one minimal turn to
+  `POST https://chatgpt.com/backend-api/codex/responses` (the endpoint Codex itself uses) with a
+  `"."` prompt and empty instructions, on the current Codex model (fallback: the first listed model
+  in `models_cache.json`). Claude and Codex keep separate cooldowns, and the row's "last" time
+  shows the later of the two.
 
 Escape hatch (the app must not be running):
 
