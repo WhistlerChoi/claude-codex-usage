@@ -206,7 +206,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 await MainActor.run {
                     self.codexInFlight = false
                     self.renderCodexUsage(usage, model)
-                    self.maybeWakeUpCodex(resetsAt: usage.fiveHour.resetsAt)
+                    // An idle Codex window still reports a (rolling) reset time; treat it as
+                    // absent so the wakeup rule matches Claude's.
+                    self.maybeWakeUpCodex(
+                        resetsAt: usage.fiveHour.idle ? nil : usage.fiveHour.resetsAt)
                     self.scheduleNextCodex(self.interval)
                 }
             } catch {
@@ -1500,6 +1503,24 @@ if CommandLine.arguments.contains("--selftest") {
     } else {
         check(false, "parseCodexUsage primary-only response parsed")
     }
+
+    // codexWindowIsIdle: an idle window reports reset_after == limit_window (rolling reset).
+    check(codexWindowIsIdle(resetAfterSeconds: 18000, limitWindowSeconds: 18000),
+          "codexWindowIsIdle: full window remaining -> idle")
+    check(codexWindowIsIdle(resetAfterSeconds: 17999.4, limitWindowSeconds: 18000),
+          "codexWindowIsIdle: rounding slack -> idle")
+    check(!codexWindowIsIdle(resetAfterSeconds: 17000, limitWindowSeconds: 18000),
+          "codexWindowIsIdle: countdown running -> not idle")
+    check(!codexWindowIsIdle(resetAfterSeconds: 18000, limitWindowSeconds: nil),
+          "codexWindowIsIdle: missing limit -> not idle")
+    check(!codexWindowIsIdle(resetAfterSeconds: nil, limitWindowSeconds: 18000),
+          "codexWindowIsIdle: missing reset_after -> not idle")
+    let codexIdle = #"{"rate_limit":{"primary_window":{"used_percent":0,"limit_window_seconds":18000,"reset_after_seconds":18000,"reset_at":1790254660}}}"#
+        .data(using: .utf8)!
+    check((try? parseCodexUsage(codexIdle))?.fiveHour.idle == true,
+          "parseCodexUsage: idle window -> idle (rolling reset_at present)")
+    check((try? parseCodexUsage(codexJSON))?.fiveHour.idle == false,
+          "parseCodexUsage: no window length -> not idle")
 
     // extractLastCodexModel: last turn_context wins; other record types and junk are skipped.
     let codexLog = """

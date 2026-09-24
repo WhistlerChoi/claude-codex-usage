@@ -38,8 +38,10 @@ clock-aligned. The trigger is **absence of `resets_at` only** — never `utiliza
 active window rounds to 0% and would re-fire every poll. Guards (persisted across restarts, so a
 relaunch loop cannot re-send): 30-minute cooldown, in-flight flag, state recorded *before* the
 request. The wakeup path has no access to the display layer by construction, satisfying the error
-contract below. `sendCodexWakeup()` throws `.notConfigured` until the chatgpt.com request shape is
-confirmed — do not guess it.
+contract below. Codex never omits its reset time: an idle Codex window reports a rolling
+"now + full window" reset (`reset_after_seconds == limit_window_seconds`, parsed as
+`CodexUsageWindow.idle` via `codexWindowIsIdle`), and the call site maps `idle` to an absent reset
+before `shouldWakeUp`. Keying Codex on `resetsAt == nil` alone never fires.
 
 ## Shared architecture (same 4 modules in every implementation)
 
