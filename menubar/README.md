@@ -9,7 +9,7 @@ The menu bar shows Claude and Codex usage together in the original Pulse item (t
 ⬡ 20% ▮▮▯▯▯     (Codex, green mark)
 ```
 
-Clicking it opens a dropdown with separate Claude and Codex sections, each headed by the same provider mark and name, with that provider's current model at the right end of the header row (e.g. `Opus (claude-opus-5)`, `GPT-5.6-Terra (gpt-5.6-terra)`). Each section lists its 5-hour and weekly windows with the time remaining until each resets, under a single `resets in` column caption; the Claude section additionally shows weekly per-model limits. `Refresh Now` (⌘R) re-polls both providers and carries the last-updated clock time next to its label in a smaller, de-emphasized font (the later of the two providers' last successful polls). When usage is high, the menu-bar text color turns orange (80%+) / red (95%+).
+Clicking it opens a dropdown with separate Claude and Codex sections, each headed by the same provider mark and name, with that provider's current model at the right end of the header row (e.g. `Opus (claude-opus-5)`, `GPT-5.6-Terra (gpt-5.6-terra)`). Each section lists its 5-hour and weekly windows with the time remaining until each resets, under a single `resets in` column caption; the Claude section additionally shows weekly per-model limits. Under each table a note line shows that provider's token usage for today (`Tokens today: 1.2M in · 48K out · 9.8M cache`); hovering it opens a submenu with the last 7 days and the last 30 days and their change against the prior window (`Tokens 7d: 41M in · 2.9M out · 620M cache · ▲ 12% vs prior 7d`), all computed locally from its session logs. `Refresh Now` (⌘R) re-polls both providers and carries the last-updated clock time next to its label in a smaller, de-emphasized font (the later of the two providers' last successful polls). When usage is high, the menu-bar text color turns orange (80%+) / red (95%+).
 
 > **Menu-bar only** — because of `LSUIElement` / `.accessory`, no Dock icon appears.
 
@@ -20,6 +20,7 @@ It uses the same source as the VSCode extension (ported to Swift):
 - Usage: `https://api.anthropic.com/api/oauth/usage`
 - Token: `~/.claude/.credentials.json` → macOS keychain if absent
 - Current model: the last `message.model` from the most recent transcript among `~/.claude/projects/**/*.jsonl`
+- Tokens: `message.usage` from `~/.claude/projects/**/*.jsonl` (including `subagents/`), one count per `message.id`, and for Codex the per-response usage records in `CODEX_HOME/sessions/**/*.jsonl`, bucketed by local day. Daily totals are kept in `~/.pulse/token-history.json` (override the directory with `PULSE_HOME`; shared with the other Pulse apps) so 7-day / 30-day figures survive Claude Code's 30-day transcript cleanup; `~/.pulse/cache/` holds a per-file parse cache so a poll re-reads only changed files. Computed locally; nothing from the logs is transmitted.
 
 Codex usage is fetched independently from `https://chatgpt.com/backend-api/wham/usage`.
 The app reads the Codex access token from `CODEX_HOME/auth.json` or `~/.codex/auth.json`,
@@ -98,17 +99,23 @@ spctl --assess --type execute Pulse.app
 
 - **What it reads:** the Claude Code OAuth access token (`~/.claude/.credentials.json`,
   falling back to the `Claude Code-credentials` keychain item) and, to show the current
-  model, the local transcripts under `~/.claude/projects/**/*.jsonl` — only the
-  `message.model` field is used; conversation content is never displayed or transmitted.
-  For Codex, it reads `CODEX_HOME/auth.json` or `~/.codex/auth.json` and, for the current
-  model, the rollout logs under `CODEX_HOME/sessions/**/*.jsonl` plus `models_cache.json` —
-  again only the model field is used; nothing from those logs is displayed or transmitted.
+  model and today's token totals, the local transcripts under `~/.claude/projects/**/*.jsonl` —
+  only the `message.model` field and the `message.usage` token counts are used; conversation
+  content is never displayed or transmitted. For Codex, it reads `CODEX_HOME/auth.json` or
+  `~/.codex/auth.json` and, for the current model and token totals, the rollout logs under
+  `CODEX_HOME/sessions/**/*.jsonl` plus `models_cache.json` — again only the model field and
+  the per-response token counts are used; nothing else from those logs is displayed or
+  transmitted, and the token totals are computed locally and never sent anywhere.
 - **Where data goes:** the Claude token is sent only to `https://api.anthropic.com` and
   the Codex token only to `https://chatgpt.com` to fetch usage. Nothing else leaves your
   machine; there is no analytics or telemetry.
-- **What it stores:** nothing of its own. When Pulse refreshes the OAuth token (see
-  `TokenRefresh.swift`) it writes the rotated token back to the store Claude Code reads,
-  so the two stay in sync; otherwise the token lives only in memory.
+- **What it stores:** a token ledger under `~/.pulse/` (or `$PULSE_HOME`): `token-history.json`
+  holds one line of token *counts* per day and provider (no conversation content, no paths), and
+  `cache/<provider>-files.json` holds a per-transcript parse cache keyed by the transcript's
+  *path* with its per-day counts. Both are plain JSON you can inspect or delete; deleting them
+  only loses history older than the logs still on disk. Credentials are never stored: when Pulse
+  refreshes the OAuth token (see `TokenRefresh.swift`) it writes the rotated token back to the
+  store Claude Code reads, so the two stay in sync; otherwise the token lives only in memory.
 - **How the keychain is accessed:** via `/usr/bin/security` — the same mechanism Claude
   Code itself uses — so no keychain permission dialog appears. On writes the token is
   passed hex-encoded over `security -i` stdin, never on the command line.

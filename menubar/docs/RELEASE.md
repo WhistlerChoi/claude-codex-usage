@@ -95,7 +95,12 @@ gaps for *commercial distribution*; all code fixes have been applied.
 
 - **Reads:** the Claude Code OAuth access token (`~/.claude/.credentials.json`, falling
   back to the `Claude Code-credentials` keychain item) and local transcripts under
-  `~/.claude/projects/**/*.jsonl` — only the `message.model` field is used.
+  `~/.claude/projects/**/*.jsonl` — only the `message.model` field and the `message.usage`
+  token counts (summed locally for the "Tokens: Today" line) are used. For Codex, the rollout
+  logs under `CODEX_HOME/sessions/**/*.jsonl` — only the model and per-response token counts.
 - **Sends:** the token to `https://api.anthropic.com` to fetch usage. Nothing else leaves
   the machine; no analytics or telemetry.
-- **Stores:** nothing — the token is re-read from disk/keychain on every poll.
+- **Stores:** `~/.pulse/token-history.json` (daily token counts per provider) and
+  `~/.pulse/cache/<provider>-files.json` (per-transcript parse cache: path, mtime, size, per-day
+  counts). No conversation content and no credentials — the OAuth token is re-read from
+  disk/keychain on every poll.

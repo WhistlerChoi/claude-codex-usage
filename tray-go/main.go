@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math/rand"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -13,12 +14,17 @@ import (
 )
 
 var (
-	detailItems             []*systray.MenuItem
+	claudeItems, codexItems []*systray.MenuItem // positional detail slots per provider
+	trailingItems           []*systray.MenuItem // retry / error lines under both providers
+	claudeTokens            tokenMenu
+	codexTokens             tokenMenu
 	mAbout, mRefresh, mQuit *systray.MenuItem
 	lastUsage               *usageResp
 	lastModel               *currentModel
+	lastTokens              *tokenStats
 	lastCodexUsage          *codexUsage
 	lastCodexModel          *currentModel
+	lastCodexTokens         *tokenStats
 	lastSuccessAt           time.Time
 	lastCodexSuccessAt      time.Time
 	consecutiveFailures     int
@@ -32,8 +38,69 @@ const (
 	colorError  = "#777777"
 )
 
-// systray cannot add items later. This covers both providers plus up to four Claude scoped limits.
-const maxDetailItems = 18
+// systray cannot add items later, so every menu line is pre-created, in display order:
+// Claude slots, Claude "Tokens today" (with a 7d / 30d submenu), Codex slots, Codex tokens,
+// trailing slots. Claude: header, stale, 5h, Weekly, Opus, Sonnet, up to 4 scoped, model = 11.
+// Codex: header, stale, 5h, Weekly, model = 5. Trailing: retry line (+1 spare).
+const (
+	claudeSlots   = 12
+	codexSlots    = 6
+	trailingSlots = 3
+)
+
+// tokenMenu is one provider's "Tokens today" row. The 7d / 30d rows live in its submenu so they
+// only appear on hover; a dedicated item (not a positional slot) keeps the submenu arrow off
+// every other line.
+type tokenMenu struct {
+	parent   *systray.MenuItem
+	children []*systray.MenuItem
+}
+
+func newTokenMenu() tokenMenu {
+	m := tokenMenu{parent: systray.AddMenuItem("", "")}
+	for i := 0; i < 2; i++ {
+		m.children = append(m.children, m.parent.AddSubMenuItem("", ""))
+	}
+	m.parent.Hide()
+	return m
+}
+
+func (m tokenMenu) apply(stats *tokenStats) {
+	if stats == nil {
+		m.parent.Hide()
+		return
+	}
+	parent, children := tokenMenuTitles(*stats)
+	m.parent.SetTitle(parent)
+	for i, c := range m.children {
+		if i < len(children) {
+			c.SetTitle(children[i])
+		}
+	}
+	m.parent.Show()
+}
+
+func addSlots(n int) []*systray.MenuItem {
+	items := make([]*systray.MenuItem, 0, n)
+	for i := 0; i < n; i++ {
+		it := systray.AddMenuItem("", "")
+		it.Hide()
+		items = append(items, it)
+	}
+	return items
+}
+
+// setLines fills a slot group with lines and hides the unused slots (extra lines are dropped).
+func setLines(items []*systray.MenuItem, lines []string) {
+	for i, it := range items {
+		if i < len(lines) {
+			it.SetTitle(lines[i])
+			it.Show()
+		} else {
+			it.Hide()
+		}
+	}
+}
 
 func main() {
 	// --render [out.png]: save the icon image as a PNG and exit (for verification)
@@ -44,6 +111,27 @@ func main() {
 		}
 		_ = os.WriteFile(out, renderIconPNG(colorNormal), 0o644)
 		fmt.Println("wrote", out)
+		return
+	}
+	// --tokens: update the ledger and print the token rows for both providers, then exit (for verification)
+	if len(os.Args) > 1 && os.Args[1] == "--tokens" {
+		for _, p := range []struct {
+			name string
+			read func() *tokenStats
+		}{{"Claude", readTokenStats}, {"Codex", readCodexTokenStats}} {
+			fmt.Println(p.name)
+			if s := p.read(); s != nil {
+				for _, row := range tokenRows(*s) {
+					fmt.Printf("  %s: %s\n", row.Label, row.Value)
+				}
+			} else {
+				fmt.Println("  no transcripts")
+			}
+		}
+		if l := loadLedger(filepath.Join(pulseHome(), "token-history.json")); len(l.Days) > 0 {
+			dates := sortedDates(l)
+			fmt.Printf("ledger %s: %d days, %s .. %s\n", pulseHome(), len(dates), dates[0], dates[len(dates)-1])
+		}
 		return
 	}
 	if len(os.Args) > 1 && os.Args[1] == "--render-ico" {
@@ -62,11 +150,11 @@ func onReady() {
 	systray.SetTitle("")
 	systray.SetTooltip("Pulse Loading...")
 
-	for i := 0; i < maxDetailItems; i++ {
-		it := systray.AddMenuItem("", "")
-		it.Hide()
-		detailItems = append(detailItems, it)
-	}
+	claudeItems = addSlots(claudeSlots)
+	claudeTokens = newTokenMenu()
+	codexItems = addSlots(codexSlots)
+	codexTokens = newTokenMenu()
+	trailingItems = addSlots(trailingSlots)
 	systray.AddSeparator()
 	mAbout = systray.AddMenuItem("About", "About Pulse")
 	mRefresh = systray.AddMenuItem("Refresh Now", "")
@@ -133,9 +221,11 @@ func refresh(interval time.Duration) time.Duration {
 	now := time.Now()
 	if err == nil {
 		lastUsage, lastModel, lastSuccessAt = usage, readModel(readCurrentModel), now
+		lastTokens = readTokenStats()
 	}
 	if codexErr == nil {
 		lastCodexUsage, lastCodexModel, lastCodexSuccessAt = codex, readModel(readCurrentCodexModel), now
+		lastCodexTokens = readCodexTokenStats()
 	}
 
 	transient := isTransient(err) || isTransient(codexErr)
@@ -242,6 +332,17 @@ func codexDetailLines(u *codexUsage, model *currentModel) []string {
 	return lines
 }
 
+// tokenMenuTitles splits the shared token rows into the always-visible "Tokens today" title and
+// the 7d / 30d titles shown in its hover submenu.
+func tokenMenuTitles(s tokenStats) (string, []string) {
+	rows := tokenRows(s)
+	titles := make([]string, 0, len(rows))
+	for _, r := range rows {
+		titles = append(titles, r.Label+": "+r.Value)
+	}
+	return titles[0], titles[1:]
+}
+
 // compactTooltip keeps the Windows shell tooltip short enough that both
 // providers remain visible. The context menu still contains the full details.
 func compactTooltip(claudeErr, codexErr error) string {
@@ -272,76 +373,79 @@ func applyUsage(u *usageResp, model *currentModel, stale bool) {
 		shown = append([]string{"⚠ Refresh failed — showing last value"}, lines...)
 	}
 	systray.SetTooltip("Pulse\n" + strings.Join(shown, "\n"))
-
-	for i, it := range detailItems {
-		if i < len(shown) {
-			it.SetTitle(shown[i])
-			it.Show()
-		} else {
-			it.Hide()
-		}
-	}
+	setLines(claudeItems, shown)
+	claudeTokens.apply(nil)
+	setLines(codexItems, nil)
+	codexTokens.apply(nil)
+	setLines(trailingItems, nil)
 }
 
 // applyCombined renders the two independent providers together. A failure in one provider never
-// hides the last successful value of the other one.
+// hides the last successful value of the other one. Each provider's "Tokens today" row (with its
+// 7d / 30d hover submenu) sits right under that provider's lines and only while it has a value.
 func applyCombined(claudeErr, codexErr error, interval, retryIn time.Duration) {
 	claudeStale := claudeErr != nil && lastUsage != nil && shouldShowStale(time.Since(lastSuccessAt), interval)
 	codexStale := codexErr != nil && lastCodexUsage != nil && shouldShowStale(time.Since(lastCodexSuccessAt), interval)
-	lines := []string{}
+
+	claude := []string{}
+	var claudeStats *tokenStats
 	if lastUsage != nil {
-		lines = append(lines, "Claude")
+		claude = append(claude, "Claude")
 		if claudeStale {
-			lines = append(lines, "⚠ Refresh failed — showing last value")
+			claude = append(claude, "⚠ Refresh failed — showing last value")
 		}
-		lines = append(lines, detailLines(lastUsage, lastModel)...)
+		claude = append(claude, detailLines(lastUsage, lastModel)...)
+		claudeStats = lastTokens
 	} else if claudeErr != nil {
-		lines = append(lines, "Claude: "+claudeErr.Error())
+		claude = append(claude, "Claude: "+claudeErr.Error())
 	}
+
+	codex := []string{}
+	var codexStats *tokenStats
 	if lastCodexUsage != nil {
-		lines = append(lines, "Codex")
+		codex = append(codex, "Codex")
 		if codexStale {
-			lines = append(lines, "⚠ Refresh failed — showing last value")
+			codex = append(codex, "⚠ Refresh failed — showing last value")
 		}
-		lines = append(lines, codexDetailLines(lastCodexUsage, lastCodexModel)...)
+		codex = append(codex, codexDetailLines(lastCodexUsage, lastCodexModel)...)
+		codexStats = lastCodexTokens
 	} else if codexErr != nil {
-		lines = append(lines, "Codex: "+codexErr.Error())
+		codex = append(codex, "Codex: "+codexErr.Error())
 	}
+
+	trailing := []string{}
 	if isTransient(claudeErr) || isTransient(codexErr) {
-		lines = append(lines, formatRetryIn(retryIn))
+		trailing = append(trailing, formatRetryIn(retryIn))
 	}
 
 	if lastUsage != nil {
 		systray.SetIcon(iconBytes(bgFor(lastUsage)))
 	} else if lastCodexUsage != nil {
 		systray.SetIcon(iconBytes(bgForCodex(lastCodexUsage)))
-	} else if isTransient(claudeErr) || isTransient(codexErr) {
-		systray.SetIcon(iconBytes(colorError))
 	} else {
 		systray.SetIcon(iconBytes(colorError))
 	}
 	systray.SetTooltip(compactTooltip(claudeErr, codexErr))
-	for i, it := range detailItems {
-		if i < len(lines) {
-			it.SetTitle(lines[i])
-			it.Show()
-		} else {
-			it.Hide()
-		}
-	}
+	setLines(claudeItems, claude)
+	claudeTokens.apply(claudeStats)
+	setLines(codexItems, codex)
+	codexTokens.apply(codexStats)
+	setLines(trailingItems, trailing)
+}
+
+// hideProviders clears both provider blocks (used by the whole-app error paths).
+func hideProviders() {
+	setLines(claudeItems, nil)
+	claudeTokens.apply(nil)
+	setLines(codexItems, nil)
+	codexTokens.apply(nil)
 }
 
 func applyError(message string) {
 	systray.SetIcon(iconBytes(colorError))
 	systray.SetTooltip("Pulse\n⚠ " + message)
-	for i, it := range detailItems {
-		if i == 0 {
-			it.SetTitle(message)
-			it.Show()
-		} else {
-			it.Hide()
-		}
-	}
+	hideProviders()
+	setLines(trailingItems, []string{message})
 }
 
 // applyTransient: transient failure (network, HTTP 429) with no previous value to show. Uses a
@@ -351,13 +455,6 @@ func applyTransient(message string, retryIn time.Duration) {
 	systray.SetIcon(iconBytes(colorError))
 	retry := formatRetryIn(retryIn)
 	systray.SetTooltip("Pulse\n⚠ " + message + "\n" + retry)
-	lines := []string{message, retry}
-	for i, it := range detailItems {
-		if i < len(lines) {
-			it.SetTitle(lines[i])
-			it.Show()
-		} else {
-			it.Hide()
-		}
-	}
+	hideProviders()
+	setLines(trailingItems, []string{message, retry})
 }
