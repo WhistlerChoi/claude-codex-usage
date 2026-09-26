@@ -1,5 +1,6 @@
 import type { UsageData, UsageWindow } from "./usageClient";
 import type { CurrentModel } from "./model";
+import { tokenRows, type TokenStats } from "./tokenHistory";
 
 /**
  * The API's utilization is already a percent (0-100). Just round to an integer.
@@ -47,12 +48,17 @@ function windowLine(label: string, w: UsageWindow, now: Date): string {
   return `**${label}**: ${pct(w.utilization)}% · ${formatResetIn(w.resetsAt, now)}`;
 }
 
+/** Command behind the tooltip's "7d / 30d ▸" link; the only command the tooltip is trusted to run. */
+export const TOGGLE_TOKEN_HISTORY_COMMAND = "pulse.toggleTokenHistory";
+
 /** Hover tooltip Markdown body. */
 export function tooltipMarkdown(
   usage: UsageData,
   lastUpdated: Date,
   now: Date = new Date(),
-  model?: CurrentModel | null
+  model?: CurrentModel | null,
+  tokens?: TokenStats | null,
+  showTokenHistory = false
 ): string {
   const lines: string[] = [
     "### Pulse",
@@ -75,6 +81,17 @@ export function tooltipMarkdown(
   }
   if (model) {
     lines.push("", `**Current model**: ${model.name} (\`${model.id}\`)`);
+  }
+  if (tokens) {
+    if (!model) lines.push("");
+    // Only "Tokens today" is shown by default; the 7d / 30d rows sit behind a toggle link
+    // (a markdown hover cannot open a nested hover, so a command link is the reveal control).
+    const [today, ...history] = tokenRows(tokens);
+    const toggle = `[${showTokenHistory ? "Hide ▾" : "7d / 30d ▸"}](command:${TOGGLE_TOKEN_HISTORY_COMMAND})`;
+    lines.push(`**${today.label}**: ${today.value} · ${toggle}`);
+    if (showTokenHistory) {
+      for (const row of history) lines.push(`**${row.label}**: ${row.value}`);
+    }
   }
   lines.push("", `_Updated: ${formatClock(lastUpdated)}_`, "", "Click to refresh now");
   return lines.join("\n");

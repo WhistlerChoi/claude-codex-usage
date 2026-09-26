@@ -43,6 +43,7 @@ Cx 20% ▮▮▯▯▯
 - Provides a detailed dropdown with Claude 5-hour, weekly, and per-model weekly limits such as `Weekly Fable`
 - Shows Codex 5-hour and weekly limits, including the reset time for each window
 - Detects the current Claude model from the latest local session transcript
+- Shows today's token usage per provider (`Tokens today: 1.2M in · 48K out · 9.8M cache`); hover that row to see the last 7 days and the last 30 days with the change against the prior window (`Tokens 7d: 41M in · 2.9M out · 620M cache · ▲ 12% vs prior 7d`), computed locally from the Claude Code transcripts and Codex session logs and kept in a small daily ledger at `~/.pulse/token-history.json` so history outlives Claude Code's 30-day transcript cleanup
 - Refreshes automatically every five minutes by default, with `Refresh Now` for an immediate update
 - Offers an optional `Auto Wakeup` switch that keeps the 5-hour row from going blank when the window has no recorded activity (off by default; see below)
 - Refreshes Claude OAuth credentials automatically and keeps the result synchronized with Claude Code's credential store
@@ -91,7 +92,7 @@ Always shows Claude Code's 5-hour / weekly usage in the VSCode status bar.
 
 - Shows usage + current model in the status bar as `5h 42% · wk 8% · Opus 4.8`
 - The current model is read from the most recent session transcript (`~/.claude/projects/**/*.jsonl`)
-- Hover for a detailed tooltip: time remaining until each window resets, weekly Opus/Sonnet split, current model ID, and last update time
+- Hover for a detailed tooltip: time remaining until each window resets, weekly Opus/Sonnet split, current model ID, today's token usage with a `7d / 30d ▸` link that reveals the 7-day / 30-day totals and their change against the prior window (computed locally from the transcripts, kept in `~/.pulse/token-history.json`; `pulse.showTokens` turns it off), and last update time
 - Status-bar color warns (yellow) / alerts (red) when usage is high
 - Refresh interval and warn/alert thresholds are configurable in settings
 - Click the status bar to refresh immediately

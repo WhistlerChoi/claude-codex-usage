@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <?ifndef ProductVersion ?>
-<?define ProductVersion = "1.4.3" ?>
+<?define ProductVersion = "1.5.0" ?>
 <?endif?>
 <Wix
   xmlns="http://wixtoolset.org/schemas/v4/wxs"

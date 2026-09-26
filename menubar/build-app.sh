@@ -38,8 +38,8 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundleName</key><string>Pulse</string>
   <key>CFBundleDisplayName</key><string>Pulse</string>
   <key>CFBundleIdentifier</key><string>com.wemeet.pulse</string>
-  <key>CFBundleVersion</key><string>1.4.3</string>
-  <key>CFBundleShortVersionString</key><string>1.4.3</string>
+  <key>CFBundleVersion</key><string>1.5.0</string>
+  <key>CFBundleShortVersionString</key><string>1.5.0</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleExecutable</key><string>$BIN_NAME</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>

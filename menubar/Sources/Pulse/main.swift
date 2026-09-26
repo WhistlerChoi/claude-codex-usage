@@ -14,6 +14,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private var lastUsage: UsageData?
     private var lastModel: CurrentModel?
+    private var lastTokens: TokenStats?
     private var lastClaudeUpdated: Date?
     private var lastSuccessAt: Date?
     private var consecutiveFailures = 0
@@ -21,6 +22,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var aboutWindow: NSWindow?
     private var lastCodexUsage: CodexUsage?
     private var lastCodexModel: CurrentModel?
+    private var lastCodexTokens: TokenStats?
     private var lastCodexUpdated: Date?
     private var codexLoginNeeded = false
     private var codexInFlight = false
@@ -178,9 +180,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             do {
                 let usage = try await fetchUsageAutoRefreshing()
                 let model = readCurrentModel()
+                let tokens = readTokenStats()
                 await MainActor.run {
                     self.inFlight = false
-                    self.renderUsage(usage, model)
+                    self.renderUsage(usage, model, tokens)
                     self.maybeWakeUpClaude(resetsAt: usage.fiveHour.resetsAt)
                     self.lastSuccessAt = Date()
                     self.consecutiveFailures = 0
@@ -203,9 +206,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             do {
                 let usage = try await fetchCodexUsage()
                 let model = readCurrentCodexModel()
+                let tokens = readCodexTokenStats()
                 await MainActor.run {
                     self.codexInFlight = false
-                    self.renderCodexUsage(usage, model)
+                    self.renderCodexUsage(usage, model, tokens)
                     // An idle Codex window still reports a (rolling) reset time; treat it as
                     // absent so the wakeup rule matches Claude's.
                     self.maybeWakeUpCodex(
@@ -451,9 +455,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return img
     }
 
-    private func renderCodexUsage(_ usage: CodexUsage, _ model: CurrentModel?) {
+    private func renderCodexUsage(_ usage: CodexUsage, _ model: CurrentModel?, _ tokens: TokenStats?) {
         lastCodexUsage = usage
         lastCodexModel = model
+        lastCodexTokens = tokens
         lastCodexUpdated = Date()
         codexLoginNeeded = false
         if lastUsage != nil {
@@ -471,6 +476,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if let weekly = usage.weekly {
                 lines.append("Codex Weekly: \(weekly.usedPercent)% · \(formatResetIn(weekly.resetsAt))")
             }
+            if let tokens { lines.append(tokenMenuTitles(tokens).today) }
             if let at = lastCodexUpdated {
                 lines.append("Updated: \(clockString(at))")
             }
@@ -509,9 +515,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Rendering
 
     /// Store a fresh Claude result and redraw. Only this path moves the Claude timestamp.
-    private func renderUsage(_ usage: UsageData, _ model: CurrentModel?) {
+    private func renderUsage(_ usage: UsageData, _ model: CurrentModel?, _ tokens: TokenStats?) {
         lastUsage = usage
         lastModel = model
+        lastTokens = tokens
         lastClaudeUpdated = Date()
         renderAll()
     }
@@ -555,11 +562,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 codexRows.append(UsageRow(label: "Weekly", pct: weekly.usedPercent,
                                           reset: formatResetDuration(weekly.resetsAt)))
             }
-            codexSection = ProviderSection(rows: codexRows, model: lastCodexModel)
+            codexSection = ProviderSection(rows: codexRows, model: lastCodexModel, tokens: lastCodexTokens)
         }
 
         rebuildMenu(
-            claude: ProviderSection(rows: claudeRows, model: model),
+            claude: ProviderSection(rows: claudeRows, model: model, tokens: lastTokens),
             codex: codexSection,
             updatedAt: latestDate(lastClaudeUpdated, lastCodexUpdated),
             showCodexLogin: codexLoginNeeded)
@@ -721,6 +728,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             tableItem.view = makeUsageTableView(
                 rows: section.rows, columnWidths: widths, captionResetColumn: caption)
             menu.addItem(tableItem)
+            if let tokens = section.tokens {
+                menu.addItem(makeTokensItem(tokens))
+            }
         }
 
         addSection(.claude, claude, caption: true)
@@ -768,6 +778,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         quitItem.target = self
         menu.addItem(quitItem)
     }
+}
+
+/// De-emphasized note row under a provider's usage table: "Tokens today: 1.2M in · 48K out ·
+/// 9.8M cache". The rolling 7d and 30d rows (with their trend) live in its submenu, so they only
+/// appear when the row is hovered. Local ledger figures (`TokenHistory.swift`); same wording as
+/// the other ports.
+func makeTokensItem(_ tokens: TokenStats) -> NSMenuItem {
+    func noteItem(_ text: String) -> NSMenuItem {
+        let item = NSMenuItem(title: text, action: nil, keyEquivalent: "")
+        item.isEnabled = true
+        item.attributedTitle = NSAttributedString(
+            string: text,
+            attributes: [.font: NSFont.menuFont(ofSize: 0), .foregroundColor: NSColor.secondaryLabelColor])
+        return item
+    }
+    let titles = tokenMenuTitles(tokens)
+    let item = noteItem(titles.today)
+    let submenu = NSMenu()
+    submenu.autoenablesItems = false  // keep the info rows readable (not dimmed)
+    for line in titles.history { submenu.addItem(noteItem(line)) }
+    item.submenu = submenu
+    return item
 }
 
 /// "Refresh Now" followed by the last-updated clock time in a smaller, de-emphasized font.
@@ -1522,6 +1554,165 @@ if CommandLine.arguments.contains("--selftest") {
     check((try? parseCodexUsage(codexJSON))?.fiveHour.idle == false,
           "parseCodexUsage: no window length -> not idle")
 
+    // Token accounting (Tokens.swift): per-local-day buckets, deduplicated by message.id.
+    let dayA = Calendar.current.date(from: DateComponents(year: 2026, month: 9, day: 25, hour: 22))!
+    let dayB = Calendar.current.date(from: DateComponents(year: 2026, month: 9, day: 26, hour: 1))!
+    let iso = ISO8601DateFormatter()
+    func aLine(_ id: String, _ d: Date, _ usage: String) -> String {
+        "{\"type\":\"assistant\",\"timestamp\":\"\(iso.string(from: d))\",\"message\":{\"id\":\"\(id)\",\"usage\":{\(usage)}}}"
+    }
+    let claudeTok = [
+        aLine("a", dayA, "\"input_tokens\":10,\"output_tokens\":20,\"cache_creation_input_tokens\":30,\"cache_read_input_tokens\":40"),
+        aLine("a", dayA, "\"input_tokens\":10,\"output_tokens\":20,\"cache_creation_input_tokens\":30,\"cache_read_input_tokens\":40"),
+        aLine("b", dayB, "\"input_tokens\":1,\"output_tokens\":2,\"cache_creation_input_tokens\":3,\"cache_read_input_tokens\":4"),
+        "{\"type\":\"assistant\",\"message\":{\"id\":\"nots\",\"usage\":{\"input_tokens\":100}}}",
+        "{\"type\":\"user\",\"timestamp\":\"\(iso.string(from: dayB))\",\"message\":{\"usage\":{\"input_tokens\":999}}}",
+        "junk",
+        aLine("c", dayB, "\"output_tokens\":2"),
+    ].joined(separator: "\n")
+    let ct = extractDailyTotals(claudeTok)
+    check(ct == ["2026-09-25": TokenTotals(input: 10, output: 20, cacheRead: 40, cacheCreate: 30),
+                 "2026-09-26": TokenTotals(input: 1, output: 4, cacheRead: 4, cacheCreate: 3)],
+          "extractDailyTotals: local-day buckets, dedup by message.id, junk skipped (got \(ct))")
+    check(extractDailyTotals("").isEmpty, "extractDailyTotals: empty -> no buckets")
+
+    // formatTokens / tokenTotalsText: identical strings to the other ports.
+    check(formatTokens(0) == "0" && formatTokens(999) == "999", "formatTokens: plain below 1000")
+    check(formatTokens(1234) == "1.2K" && formatTokens(48_000) == "48K" && formatTokens(310_400) == "310K",
+          "formatTokens: K scale")
+    check(formatTokens(999_999) == "1.0M" && formatTokens(9_800_000) == "9.8M" && formatTokens(13_500_000) == "14M",
+          "formatTokens: M scale")
+    check(formatTokens(999_999_999) == "1.0B" && formatTokens(2_100_000_000) == "2.1B", "formatTokens: B scale")
+    check(tokenTotalsText(TokenTotals(input: 1_200_000, output: 48_000, cacheRead: 9_000_000, cacheCreate: 800_000))
+          == "1.2M in · 48K out · 9.8M cache", "tokenTotalsText: in · out · cache")
+
+    // Codex (CodexTokens.swift): token_usage_record preferred and deduplicated by response_id;
+    // input_tokens includes cached_input_tokens, which the shared totals keep apart.
+    let codexDay = localDateKey(parseISODate("2026-09-26T01:00:00Z")!)
+    let codexRecords = """
+    {"timestamp":"2026-09-26T01:00:00Z","type":"turn_context","payload":{"model":"gpt-6-astra"}}
+    {"timestamp":"2026-09-26T01:00:00Z","type":"token_usage_record","payload":{"response_id":"r1","usage":{"input_tokens":1000,"cached_input_tokens":600,"cache_write_input_tokens":0,"output_tokens":50}}}
+    {"timestamp":"2026-09-26T01:00:00.5Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":999999},"last_token_usage":{"input_tokens":1000,"cached_input_tokens":600,"cache_write_input_tokens":0,"output_tokens":50}}}}
+    {"timestamp":"2026-09-26T01:01:00Z","type":"token_usage_record","payload":{"response_id":"r2","usage":{"input_tokens":300,"cached_input_tokens":0,"cache_write_input_tokens":20,"output_tokens":5}}}
+    {"timestamp":"2026-09-26T01:01:00Z","type":"token_usage_record","payload":{"response_id":"r2","usage":{"input_tokens":300,"cached_input_tokens":0,"cache_write_input_tokens":20,"output_tokens":5}}}
+    {"timestamp":"2026-09-20T01:00:00Z","type":"token_usage_record","payload":{"response_id":"r0","usage":{"input_tokens":5000,"output_tokens":5000}}}
+    """
+    let cr = extractCodexDailyTotals(codexRecords)
+    check(cr[codexDay] == TokenTotals(input: 700, output: 55, cacheRead: 600, cacheCreate: 20) && cr.count == 2,
+          "extractCodexDailyTotals: records preferred, response_id dedup, day buckets (got \(cr))")
+    let codexEvents = """
+    {"timestamp":"2026-09-26T01:00:00Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":1000,"cached_input_tokens":600,"cache_write_input_tokens":0,"output_tokens":50}}}}
+    {"timestamp":"2026-09-26T01:00:01Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":1000,"cached_input_tokens":600,"cache_write_input_tokens":0,"output_tokens":50}}}}
+    {"timestamp":"2026-09-26T01:00:02Z","type":"event_msg","payload":{"type":"token_count","info":null,"rate_limits":{}}}
+    {"timestamp":"2026-09-26T01:02:00Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":300,"cached_input_tokens":0,"cache_write_input_tokens":20,"output_tokens":5}}}}
+    """
+    let ce = extractCodexDailyTotals(codexEvents)
+    check(ce[codexDay] == TokenTotals(input: 700, output: 55, cacheRead: 600, cacheCreate: 20) && ce.count == 1,
+          "extractCodexDailyTotals: token_count fallback, consecutive repeats and null info skipped (got \(ce))")
+    check(extractCodexDailyTotals("junk\n\n{\"type\":\"session_meta\"}").isEmpty,
+          "extractCodexDailyTotals: junk -> no buckets")
+
+    // TokenHistory.swift: ledger max rule, ranges, trend, stats, rows.
+    check(localDateKey(Calendar.current.date(from: DateComponents(year: 2026, month: 9, day: 26, hour: 23, minute: 59))!) == "2026-09-26",
+          "localDateKey")
+    check(dateShift("2026-09-26", -6) == "2026-09-20" && dateShift("2026-03-01", -1) == "2026-02-28"
+          && dateShift("2026-01-01", -1) == "2025-12-31", "dateShift")
+    var ledger = TokenLedger()
+    check(ledger.merge(provider: "claude", daily: ["2026-09-25": TokenTotals(input: 10, output: 5), "2026-09-26": TokenTotals(input: 1, output: 1)], today: "2026-09-26"),
+          "ledger.merge: first merge changes")
+    check(ledger.merge(provider: "claude", daily: ["2026-09-25": TokenTotals(input: 4, output: 9), "2026-09-26": TokenTotals(input: 1, output: 1)], today: "2026-09-26"),
+          "ledger.merge: growing field changes")
+    check(ledger.days["2026-09-25"]?["claude"] == TokenTotals(input: 10, output: 9), "ledger.merge: per-field max, never adds")
+    check(!ledger.merge(provider: "claude", daily: ["2026-09-26": TokenTotals(input: 1, output: 1)], today: "2026-09-26"),
+          "ledger.merge: no-op reports no change")
+    check(ledger.since["claude"] == "2026-09-26", "ledger.merge: since = first observation")
+    _ = ledger.merge(provider: "codex", daily: ["2026-09-26": TokenTotals(input: 7)], today: "2026-09-26")
+    check(ledger.days["2026-09-26"]?["codex"] == TokenTotals(input: 7) && ledger.days["2026-09-26"]?["claude"] == TokenTotals(input: 1, output: 1),
+          "ledger.merge: providers side by side")
+    var other = TokenLedger()
+    _ = other.merge(provider: "claude", daily: ["2026-09-25": TokenTotals(input: 4, output: 50), "2026-09-20": TokenTotals(input: 2)], today: "2026-09-20")
+    let merged = TokenLedger.merged(ledger, other)
+    check(merged.days["2026-09-25"]?["claude"] == TokenTotals(input: 10, output: 50) && merged.days["2026-09-20"]?["claude"] == TokenTotals(input: 2)
+          && merged.since["claude"] == "2026-09-20", "TokenLedger.merged: max per field, earliest since")
+    var l3 = TokenLedger()
+    _ = l3.merge(provider: "claude", daily: ["2026-09-20": TokenTotals(input: 1), "2026-09-21": TokenTotals(input: 2), "2026-09-22": TokenTotals(input: 4), "2026-09-23": TokenTotals(input: 8)], today: "2026-09-23")
+    check(l3.sum(provider: "claude", from: "2026-09-21", to: "2026-09-22") == TokenTotals(input: 6), "ledger.sum: inclusive range")
+    check(trendText(TokenTotals(input: 112), TokenTotals(input: 100)) == "▲ 12%" && trendText(TokenTotals(input: 95), TokenTotals(input: 100)) == "▼ 5%"
+          && trendText(TokenTotals(input: 50, output: 50), TokenTotals(input: 60, output: 40)) == "± 0%"
+          && trendText(TokenTotals(input: 5), TokenTotals()) == "—" && trendText(TokenTotals(input: 5), nil) == "—", "trendText")
+    var l4 = TokenLedger()
+    var daily14: [String: TokenTotals] = [:]
+    for i in 0..<14 { daily14[dateShift("2026-09-26", -i)] = TokenTotals(input: 1) }
+    _ = l4.merge(provider: "claude", daily: daily14, today: "2026-09-26")
+    let st = l4.stats(provider: "claude", today: "2026-09-26")
+    check(st.today == TokenTotals(input: 1) && st.last7 == TokenTotals(input: 7) && st.prev7 == TokenTotals(input: 7)
+          && st.last30 == TokenTotals(input: 14) && st.prev30 == nil, "ledger.stats: rolling windows, prior 30d needs coverage (got \(st))")
+    let rows = tokenRows(TokenStats(
+        today: TokenTotals(input: 5_900, output: 406_000, cacheRead: 78_000_000, cacheCreate: 2_300_000),
+        last7: TokenTotals(input: 41_000_000, output: 2_900_000, cacheRead: 600_000_000, cacheCreate: 20_000_000),
+        prev7: TokenTotals(input: 30_000_000, output: 2_000_000, cacheRead: 550_000_000, cacheCreate: 10_000_000),
+        last30: TokenTotals(input: 120_000_000, output: 9_100_000, cacheRead: 2_000_000_000, cacheCreate: 100_000_000),
+        prev30: nil))
+    check(rows.map { $0.label } == ["Tokens today", "Tokens 7d", "Tokens 30d"]
+          && rows[0].value == "5.9K in · 406K out · 80M cache"
+          && rows[1].value == "41M in · 2.9M out · 620M cache · ▲ 12% vs prior 7d"
+          && rows[2].value == "120M in · 9.1M out · 2.1B cache · — vs prior 30d", "tokenRows: shared wording (got \(rows))")
+
+    // tokenMenuTitles: "Tokens today" is the visible row; 7d / 30d go into its hover submenu.
+    let menuTitles = tokenMenuTitles(TokenStats(
+        today: TokenTotals(input: 1200, output: 48, cacheRead: 100), last7: TokenTotals(input: 7), prev7: nil,
+        last30: TokenTotals(input: 30), prev30: nil))
+    check(menuTitles.today == "Tokens today: 1.2K in · 48 out · 100 cache"
+          && menuTitles.history == ["Tokens 7d: 7 in · 0 out · 0 cache · — vs prior 7d",
+                                    "Tokens 30d: 30 in · 0 out · 0 cache · — vs prior 30d"],
+          "tokenMenuTitles: today visible, 7d / 30d in submenu (got \(menuTitles))")
+    let tokensItem = makeTokensItem(TokenStats(
+        today: TokenTotals(input: 1200, output: 48, cacheRead: 100), last7: TokenTotals(input: 7), prev7: nil,
+        last30: TokenTotals(input: 30), prev30: nil))
+    check(tokensItem.title == menuTitles.today && tokensItem.hasSubmenu
+          && tokensItem.submenu?.items.map(\.title) == menuTitles.history
+          && tokensItem.submenu?.items.allSatisfy(\.isEnabled) == true,
+          "makeTokensItem: dropdown row shows today only; 7d / 30d are its hover submenu")
+
+    // updateTokenHistory: backfill, subagents, deleted-file preservation, cache reuse, corrupt ledger quarantine.
+    let histBase = FileManager.default.temporaryDirectory.appendingPathComponent("pulse-hist-\(UUID().uuidString)")
+    let histRoot = histBase.appendingPathComponent("projects")
+    let histHome = histBase.appendingPathComponent("pulse-home")
+    let histProj = histRoot.appendingPathComponent("-Users-me-proj")
+    try? FileManager.default.createDirectory(at: histProj.appendingPathComponent("sess1/subagents"), withIntermediateDirectories: true)
+    let histNow = Calendar.current.date(from: DateComponents(year: 2026, month: 9, day: 26, hour: 12))!
+    let h0 = Calendar.current.date(from: DateComponents(year: 2026, month: 9, day: 26, hour: 10))!
+    let h1 = Calendar.current.date(from: DateComponents(year: 2026, month: 9, day: 25, hour: 10))!
+    try? (aLine("a", h0, "\"input_tokens\":10") + "\n" + aLine("b", h1, "\"input_tokens\":3") + "\n")
+        .write(to: histProj.appendingPathComponent("sess1.jsonl"), atomically: true, encoding: .utf8)
+    try? (aLine("c", h0, "\"output_tokens\":7") + "\n")
+        .write(to: histProj.appendingPathComponent("sess1/subagents/agent-x.jsonl"), atomically: true, encoding: .utf8)
+    let oldFile = histProj.appendingPathComponent("old.jsonl")
+    try? (aLine("d", h1, "\"input_tokens\":100") + "\n").write(to: oldFile, atomically: true, encoding: .utf8)
+    var histReads = 0
+    let counting: (String) -> [String: TokenTotals] = { histReads += 1; return extractDailyTotals($0) }
+    let s1 = updateTokenHistory(provider: "claude", root: histRoot, extract: counting, home: histHome, now: histNow)
+    check(s1?.today == TokenTotals(input: 10, output: 7) && s1?.last7 == TokenTotals(input: 113, output: 7) && histReads == 3,
+          "updateTokenHistory: backfill incl. subagents (got \(String(describing: s1)) reads \(histReads))")
+    try? FileManager.default.removeItem(at: oldFile)
+    let s2 = updateTokenHistory(provider: "claude", root: histRoot, extract: counting, home: histHome, now: histNow)
+    check(s2?.last7 == TokenTotals(input: 113, output: 7) && histReads == 3,
+          "updateTokenHistory: deleted file keeps its contribution, unchanged files not re-read (reads \(histReads))")
+    try? (aLine("a", h0, "\"input_tokens\":10") + "\n" + aLine("b", h1, "\"input_tokens\":3") + "\n" + aLine("e", h0, "\"input_tokens\":5") + "\n")
+        .write(to: histProj.appendingPathComponent("sess1.jsonl"), atomically: true, encoding: .utf8)
+    let s3 = updateTokenHistory(provider: "claude", root: histRoot, extract: counting, home: histHome, now: histNow)
+    check(s3?.today == TokenTotals(input: 15, output: 7) && histReads == 4, "updateTokenHistory: appended file re-read once (reads \(histReads))")
+    check(FileManager.default.fileExists(atPath: histHome.appendingPathComponent("cache/claude-files.json").path),
+          "updateTokenHistory: file cache persisted")
+    try? "{not json".write(to: histHome.appendingPathComponent("token-history.json"), atomically: true, encoding: .utf8)
+    let s4 = updateTokenHistory(provider: "claude", root: histRoot, extract: counting, home: histHome, now: histNow)
+    let histNames = (try? FileManager.default.contentsOfDirectory(atPath: histHome.path)) ?? []
+    check(s4?.today == TokenTotals(input: 15, output: 7) && histNames.contains { $0.hasPrefix("token-history.json.corrupt-") },
+          "updateTokenHistory: corrupt ledger quarantined (\(histNames))")
+    check(updateTokenHistory(provider: "claude", root: histBase.appendingPathComponent("nope"), extract: counting, home: histHome, now: histNow) == nil,
+          "updateTokenHistory: missing root -> nil")
+    try? FileManager.default.removeItem(at: histBase)
+
     // extractLastCodexModel: last turn_context wins; other record types and junk are skipped.
     let codexLog = """
     {"type":"session_meta","payload":{"model_provider":"openai"}}
@@ -1706,6 +1897,7 @@ if CommandLine.arguments.contains("--once") {
         do {
             let usage = try await fetchUsageAutoRefreshing()
             let model = readCurrentModel()
+            let tokens = readTokenStats()
             print("[gauge] " + menuBarText(usage))
             print("  5h:     \(pct(usage.fiveHour.utilization))% · \(formatResetIn(usage.fiveHour.resetsAt))")
             print("  Weekly: \(pct(usage.sevenDay.utilization))% · \(formatResetIn(usage.sevenDay.resetsAt))")
@@ -1713,6 +1905,7 @@ if CommandLine.arguments.contains("--once") {
                 print("  Weekly \(scoped.model): \(pct(scoped.window.utilization))% · \(formatResetIn(scoped.window.resetsAt))")
             }
             if let model = model { print("  Model:  \(model.name) (\(model.id))") }
+            if let tokens { for row in tokenRows(tokens) { print("  \(row.label): \(row.value)") } }
         } catch {
             print("Error: \(error.localizedDescription)")
         }
@@ -1745,6 +1938,7 @@ if CommandLine.arguments.contains("--codex-once") {
         do {
             let usage = try await fetchCodexUsage()
             let model = readCurrentCodexModel()
+            let tokens = readCodexTokenStats()
             print("[codex]")
             print("  5h:     \(usage.fiveHour.usedPercent)% · \(formatResetIn(usage.fiveHour.resetsAt))")
             if let weekly = usage.weekly {
@@ -1752,6 +1946,7 @@ if CommandLine.arguments.contains("--codex-once") {
             }
             if let plan = usage.planType { print("  Plan: \(plan)") }
             if let model = model { print("  Model:  \(model.name) (\(model.id))") }
+            if let tokens { for row in tokenRows(tokens) { print("  \(row.label): \(row.value)") } }
         } catch {
             print("Error: \(error.localizedDescription)")
         }

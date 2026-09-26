@@ -31,6 +31,7 @@ struct UsageRow {
 struct ProviderSection {
     let rows: [UsageRow]
     let model: CurrentModel?   // shown at the right edge of the section header, if known
+    var tokens: TokenStats? = nil   // local token stats (today / 7d / 30d), note lines under the table
 }
 
 enum UsageError: Error, LocalizedError {

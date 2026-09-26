@@ -56,7 +56,7 @@ func TestDetailLinesWeeklyScoped(t *testing.T) {
 		WeeklyScoped: []scopedWindow{{Model: "Fable", Window: window{Utilization: 12}}},
 	}
 	joined := strings.Join(detailLines(u, nil), "\n")
-	if !strings.Contains(joined, "Weekly Fable: 12% · ") {
+	if !strings.Contains(joined, "Weekly Fable: 12%\t") {
 		t.Fatalf("missing Weekly Fable line:\n%s", joined)
 	}
 

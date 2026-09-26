@@ -2,7 +2,7 @@
   "name": "pulse",
   "displayName": "Pulse for Claude Code",
   "description": "Show Claude Code's 5-hour/weekly usage in the status bar.",
-  "version": "1.4.3",
+  "version": "1.5.0",
   "publisher": "wemeet",
   "engines": {
     "vscode": "^1.85.0"
@@ -19,6 +19,10 @@
       {
         "command": "pulse.refresh",
         "title": "Pulse: Refresh now"
+      },
+      {
+        "command": "pulse.toggleTokenHistory",
+        "title": "Pulse: Toggle 7d / 30d token history"
       }
     ],
     "configuration": {
@@ -43,6 +47,11 @@
           "minimum": 0,
           "maximum": 1,
           "description": "Show the status bar in the error color at or above this utilization (0-1)."
+        },
+        "pulse.showTokens": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show token usage in the tooltip: today's totals, with the 7-day / 30-day totals and trend behind the \"7d / 30d ▸\" link. Computed locally from the Claude Code transcripts under ~/.claude/projects and kept in ~/.pulse/token-history.json (override with PULSE_HOME)."
         }
       }
     }

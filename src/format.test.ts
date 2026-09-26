@@ -181,3 +181,33 @@ test("formatRetryIn: seconds, minutes, hours", () => {
   assert.equal(formatRetryIn(3_600_000), "Retrying in 1h");
   assert.equal(formatRetryIn(3_900_000), "Retrying in 1h 5m");
 });
+
+const TOK = (input: number, output = 0, cacheRead = 0, cacheCreate = 0) => ({ input, output, cacheRead, cacheCreate });
+const STATS = { today: TOK(1_200_000, 48_000, 9_000_000, 800_000), last7: TOK(112), prev7: TOK(100), last30: TOK(200), prev30: null };
+
+test("tooltipMarkdown: by default shows only Tokens today plus a 7d / 30d toggle link", () => {
+  const md = tooltipMarkdown(parseUsage(sampleRaw), new Date(), new Date(), { id: "claude-fable-5-1", name: "Fable 5.1" }, STATS);
+  const lines = md.split("\n");
+  const modelIdx = lines.findIndex((l) => l.startsWith("**Current model**"));
+  assert.equal(
+    lines[modelIdx + 1],
+    "**Tokens today**: 1.2M in · 48K out · 9.8M cache · [7d / 30d ▸](command:pulse.toggleTokenHistory)"
+  );
+  assert.ok(!md.includes("**Tokens 7d**"));
+  assert.ok(!md.includes("**Tokens 30d**"));
+});
+
+test("tooltipMarkdown: expanded shows 7d and 30d rows and a Hide link", () => {
+  const md = tooltipMarkdown(parseUsage(sampleRaw), new Date(), new Date(), { id: "m", name: "M" }, STATS, true);
+  const lines = md.split("\n");
+  const todayIdx = lines.findIndex((l) => l.startsWith("**Tokens today**"));
+  assert.ok(lines[todayIdx].endsWith("[Hide ▾](command:pulse.toggleTokenHistory)"), lines[todayIdx]);
+  assert.equal(lines[todayIdx + 1], "**Tokens 7d**: 112 in · 0 out · 0 cache · ▲ 12% vs prior 7d");
+  assert.equal(lines[todayIdx + 2], "**Tokens 30d**: 200 in · 0 out · 0 cache · — vs prior 30d");
+});
+
+test("tooltipMarkdown: no token rows and no toggle link when stats are absent", () => {
+  const md = tooltipMarkdown(parseUsage(sampleRaw), new Date(), new Date(), { id: "m", name: "M" }, null, true);
+  assert.ok(!md.includes("**Tokens"));
+  assert.ok(!md.includes("pulse.toggleTokenHistory"));
+});
