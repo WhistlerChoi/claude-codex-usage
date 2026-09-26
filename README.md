@@ -4,8 +4,7 @@ Keep Claude Code's **5-hour and weekly usage** visible without interrupting your
 Pulse also detects the current Claude model, and the macOS menu-bar app displays **Codex usage** alongside Claude Code.
 Claude usage comes from the same source as Claude Code's `/usage` command, with integrations for VSCode, macOS, and Windows.
 
-<img width="319" height="362" alt="Screenshot 2026-09-22 at 15 22 51" src="https://github.com/user-attachments/assets/d68decfd-4704-48b6-9e00-0fd90c732c95" />
-
+<img width="381" height="408" alt="Screenshot 2026-09-26 at 23 54 16" src="https://github.com/user-attachments/assets/63d05b21-b6ca-4b31-8bba-c5de524a7c1d" />
 
 > **Privacy Notice:** Pulse does not collect, store, or transmit any personal information or usage data. It only reads the credentials required to retrieve usage information and sends them to the corresponding official service endpoints.  
 > No analytics, tracking, or hidden data collection is ever performed.
