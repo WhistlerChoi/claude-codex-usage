@@ -38,7 +38,13 @@ item. Constraints: **never swap the default login** (it would create/rewrite Cla
 item and stash refresh tokens — races running sessions and breaks the keychain rules); the refreshed
 token cache is keyed per home; ledger provider is `claude` for the default (shared with the other
 ports) and `claude-<id>` otherwise; Auto Wakeup keys are `…claude` / `…claude.<id>`; two profiles on the
-same `accountUuid|organizationUuid` are shown once.
+same `accountUuid|organizationUuid` are shown once. A profile's header (and its Show in Menu Bar row)
+carries a green **`● VS Code`** badge while a VS Code Claude session uses it (`IDEUsage.swift`): Pulse
+scans `/bin/ps -E -axww -o command=` (every poll cycle and every 30 s; redraws only on change) for
+processes with `CLAUDE_CODE_ENTRYPOINT=claude-vscode` and takes their `CLAUDE_CONFIG_DIR` (unset →
+`~/.claude`), compared after `normalizedConfigDir`. Don't switch this to `<configDir>/ide/*.lock`: the
+extension writes those from VS Code's own env, so they name the wrong dir when the account is chosen
+via the extension's `claudeCode.environmentVariables` setting.
 
 `menubar/` also contains `AutoWakeup.swift` (**menubar-only, deliberately not mirrored** to
 `src/`/`tray-go/`, like the Codex provider). Off by default. When the current 5h window has no

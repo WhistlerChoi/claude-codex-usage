@@ -51,6 +51,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Re-runs whichever menu layout was built last, so a background profile's poll can redraw
     /// its section without disturbing the primary profile's current presentation.
     private var lastMenuBuild: (() -> Void)?
+    /// Config dirs of running VS Code Claude sessions (IDEUsage.swift), for the "● VS Code" badge.
+    private var vscodeDirs: Set<String> = []
+    private var vscodeTimer: Timer?
 
     private var primary: ClaudeProfileState {
         claudeStates.first { $0.profile.id == primaryID } ?? claudeStates[0]
@@ -250,6 +253,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         rebuildMenu(detailLines: ["Loading..."])
 
         refreshAll()
+        // Sessions open and close far more often than the usage poll; a local `ps` scan is cheap.
+        vscodeTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
+            self?.scanVSCodeSessions()
+        }
+    }
+
+    /// Re-detect which profiles VS Code is using; redraw only on change (never polls the API).
+    private func scanVSCodeSessions() {
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let dirs = readVSCodeConfigDirs() ?? []
+            DispatchQueue.main.async {
+                guard let self, dirs != self.vscodeDirs else { return }
+                self.vscodeDirs = dirs
+                self.redrawMenu()
+            }
+        }
+    }
+
+    private func inVSCode(_ state: ClaudeProfileState) -> Bool {
+        vscodeDirs.contains(normalizedConfigDir(state.profile.home.configDir))
     }
 
     /// "Refresh Now" and launch: poll both providers. Each has its own in-flight guard and timer.
@@ -261,6 +284,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Poll every Claude profile. Extra profiles are staggered, so several accounts never hit the
     /// usage endpoint in one burst.
     @objc func refresh() {
+        scanVSCodeSessions()
         for (i, state) in claudeStates.enumerated() {
             if i == 0 {
                 refresh(state)
@@ -693,7 +717,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return ProviderSection(
             rows: state.usage.map(claudeRows) ?? [], model: state.model, tokens: state.tokens,
             title: multiProfile ? "\(Provider.claude.displayName) · \(state.profile.label)" : nil,
-            account: state.accountText, notes: notes)
+            account: state.accountText, notes: notes, inVSCode: inVSCode(state))
     }
 
     private func claudeRows(_ usage: UsageData) -> [UsageRow] {
@@ -914,8 +938,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         widths: (label: CGFloat, pct: CGFloat, reset: CGFloat), caption: Bool, loginFor state: ClaudeProfileState? = nil
     ) {
         // The account line is long, so it rides on the header as a hover tooltip, not a row.
+        let tip = ([section.account] + [section.inVSCode ? "In use by VS Code" : nil])
+            .compactMap { $0 }.joined(separator: "\n")
         menu.addItem(makeProviderHeaderItem(
-            provider, model: section.model, title: section.title, toolTip: section.account))
+            provider, model: section.model, title: section.title,
+            badge: section.inVSCode ? vscodeBadge : nil, toolTip: tip.isEmpty ? nil : tip))
         for note in section.notes { menu.addItem(makeNoteItem(note)) }
         if !section.rows.isEmpty {
             let tableItem = NSMenuItem()
@@ -1033,6 +1060,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             for state in claudeStates {
                 let email = state.account.map { " — \($0.email)" } ?? ""
                 let it = add(state.profile.label + email, #selector(selectPrimary(_:)), id: state.profile.id)
+                if inVSCode(state) {
+                    it.attributedTitle = badgedTitle(state.profile.label + email, badge: vscodeBadge)
+                }
                 it.state = state === primary ? .on : .off
                 it.indentationLevel = 1
             }
@@ -1339,12 +1369,30 @@ func makeAutoWakeupItem(
     return item
 }
 
+/// Badge text for a profile a running VS Code Claude session uses (drawn after a green dot).
+let vscodeBadge = "VS Code"
+
+/// A menu title followed by a green "● <badge>", for plain (non-view) menu items.
+func badgedTitle(_ title: String, badge: String) -> NSAttributedString {
+    let font = NSFont.menuFont(ofSize: 0)
+    let out = NSMutableAttributedString(string: title, attributes: [.font: font])
+    out.append(NSAttributedString(string: "   ●", attributes: [
+        .font: NSFont.systemFont(ofSize: font.pointSize - 3), .foregroundColor: NSColor.systemGreen,
+        .baselineOffset: 1,
+    ]))
+    out.append(NSAttributedString(string: " \(badge)", attributes: [
+        .font: NSFont.systemFont(ofSize: font.pointSize - 2), .foregroundColor: NSColor.secondaryLabelColor,
+    ]))
+    return out
+}
+
 func makeProviderHeaderItem(
-    _ provider: Provider, model: CurrentModel?, title: String? = nil, toolTip: String? = nil
+    _ provider: Provider, model: CurrentModel?, title: String? = nil, badge: String? = nil,
+    toolTip: String? = nil
 ) -> NSMenuItem {
     let item = NSMenuItem()
     item.isEnabled = true
-    let view = makeProviderHeaderView(provider, model: model, title: title)
+    let view = makeProviderHeaderView(provider, model: model, title: title, badge: badge)
     if let toolTip {
         // A view-backed item shows the tooltip of the view under the mouse, so tag every subview.
         item.toolTip = toolTip
@@ -1359,7 +1407,9 @@ func makeProviderHeaderItem(
 /// both de-emphasized like the note lines. AppKit stretches a menu item's view to the menu's
 /// width, so the trailing-pinned model label lands at the right edge whichever item is widest.
 /// A free function so the offscreen `--menu` render can build it without an AppDelegate.
-func makeProviderHeaderView(_ provider: Provider, model: CurrentModel?, title: String? = nil) -> NSView {
+func makeProviderHeaderView(
+    _ provider: Provider, model: CurrentModel?, title: String? = nil, badge: String? = nil
+) -> NSView {
     let leading: CGFloat = 14   // icon sits in the menu's checkmark gutter, like NSMenuItem.image did
     let trailing: CGFloat = 14  // same right inset as the usage table
     let vPad: CGFloat = 3
@@ -1383,7 +1433,31 @@ func makeProviderHeaderView(_ provider: Provider, model: CurrentModel?, title: S
     container.translatesAutoresizingMaskIntoConstraints = false
     container.addSubview(icon)
     container.addSubview(name)
-    var constraints = [
+    // Optional "● VS Code" badge right after the name; the model label then starts after it.
+    var leadingEnd = name.trailingAnchor
+    var badgeConstraints: [NSLayoutConstraint] = []
+    if let badge {
+        let badgeLabel = NSTextField(labelWithAttributedString: {
+            let s = NSMutableAttributedString(string: "●", attributes: [
+                .font: NSFont.systemFont(ofSize: font.pointSize - 3), .foregroundColor: NSColor.systemGreen,
+                .baselineOffset: 1,
+            ])
+            s.append(NSAttributedString(string: " \(badge)", attributes: [
+                .font: NSFont.systemFont(ofSize: font.pointSize - 2),
+                .foregroundColor: NSColor.secondaryLabelColor,
+            ]))
+            return s
+        }())
+        badgeLabel.lineBreakMode = .byClipping
+        badgeLabel.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(badgeLabel)
+        badgeConstraints = [
+            badgeLabel.leadingAnchor.constraint(equalTo: name.trailingAnchor, constant: 8),
+            badgeLabel.firstBaselineAnchor.constraint(equalTo: name.firstBaselineAnchor),
+        ]
+        leadingEnd = badgeLabel.trailingAnchor
+    }
+    var constraints = badgeConstraints + [
         icon.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: leading),
         icon.centerYAnchor.constraint(equalTo: container.centerYAnchor),
         icon.widthAnchor.constraint(equalToConstant: iconSize),
@@ -1396,13 +1470,13 @@ func makeProviderHeaderView(_ provider: Provider, model: CurrentModel?, title: S
         let modelLabel = label("\(model.name) (\(model.id))")
         container.addSubview(modelLabel)
         constraints += [
-            modelLabel.leadingAnchor.constraint(greaterThanOrEqualTo: name.trailingAnchor, constant: 16),
+            modelLabel.leadingAnchor.constraint(greaterThanOrEqualTo: leadingEnd, constant: 16),
             modelLabel.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -trailing),
             modelLabel.firstBaselineAnchor.constraint(equalTo: name.firstBaselineAnchor),
         ]
     } else {
         constraints.append(
-            container.trailingAnchor.constraint(greaterThanOrEqualTo: name.trailingAnchor, constant: trailing))
+            container.trailingAnchor.constraint(greaterThanOrEqualTo: leadingEnd, constant: trailing))
     }
     NSLayoutConstraint.activate(constraints)
     // Measure the intrinsic width with Auto Layout, then hand the container over to frame-based
@@ -2383,6 +2457,22 @@ if CommandLine.arguments.contains("--selftest") {
           "saveExtraProfiles: refuses to overwrite an unparseable accounts.json")
     try? FileManager.default.removeItem(at: scratch)
 
+    // --- VS Code badge (IDEUsage.swift) ---
+    let psOut = [
+        "/ext/native-binary/claude --output-format stream-json HOME=/Users/x CLAUDE_CODE_ENTRYPOINT=claude-vscode VSCODE_PID=1",
+        "/ext/native-binary/claude --verbose CLAUDE_CONFIG_DIR=/Users/x/.claude-work/ CLAUDE_CODE_ENTRYPOINT=claude-vscode PATH=/bin",
+        "node mcp.js CLAUDE_CODE_ENTRYPOINT=claude-vscode CLAUDE_CONFIG_DIR=/Users/x/My Dir",
+        "/usr/local/bin/claude CLAUDE_CONFIG_DIR=/Users/x/.claude-cli CLAUDE_CODE_ENTRYPOINT=cli",
+        "/bin/zsh CLAUDE_CODE_ENTRYPOINT=claude-vscode-x CLAUDE_CONFIG_DIR=/nope",
+    ].joined(separator: "\n")
+    check(vscodeConfigDirs(psOutput: psOut, defaultDir: "/Users/x/.claude")
+          == ["/Users/x/.claude", "/Users/x/.claude-work", "/Users/x/My Dir"],
+          "vscodeConfigDirs: default / env dir (trailing slash dropped, spaces kept) / cli and look-alikes ignored")
+    check(vscodeConfigDirs(psOutput: "/bin/zsh PATH=/bin", defaultDir: "/d").isEmpty,
+          "vscodeConfigDirs: no VS Code sessions → empty")
+    check(normalizedConfigDir("/a/b//") == "/a/b" && normalizedConfigDir("/") == "/",
+          "normalizedConfigDir: trailing slashes")
+
     print(failures == 0 ? "ALL PASS" : "\(failures) FAILURE(S)")
     exit(failures == 0 ? 0 : 1)
 }
@@ -2397,8 +2487,12 @@ if CommandLine.arguments.contains("--once") {
         } catch {
             print("accounts.json: \(error.localizedDescription)")
         }
+        let vscodeDirs = readVSCodeConfigDirs() ?? []
         for profile in profiles {
             if profiles.count > 1 { print("[\(profile.label)] \(profile.home.configDir)") }
+            if vscodeDirs.contains(normalizedConfigDir(profile.home.configDir)) {
+                print("  ● In use by VS Code")
+            }
             do {
                 let (usage, creds) = try await fetchUsageAutoRefreshing(home: profile.home)
                 let model = readCurrentModel(root: profile.home.projectsURL)
@@ -2527,7 +2621,7 @@ if let idx = CommandLine.arguments.firstIndex(of: "--menu") {
         makeUsageTableView(rows: codexRows, columnWidths: widths),
         // A second Claude account profile's header ("Claude · <label>"), as shown with several.
         makeProviderHeaderView(.claude, model: CurrentModel(id: "claude-opus-5-5", name: "Opus 5.5"),
-                               title: "Claude · Personal"),
+                               title: "Claude · Personal", badge: vscodeBadge),
         // The Auto Wakeup row: its switch must sit at the same right edge as the tables' reset
         // column once every view is stretched to the menu width.
         makeAutoWakeupView(
