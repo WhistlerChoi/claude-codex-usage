@@ -165,6 +165,9 @@ Claude Code itself provides — so every account stays logged in, and Pulse only
 - A green **`● VS Code`** badge marks the account a running Claude Code session in VS Code is using
   (read from that session's `CLAUDE_CONFIG_DIR`, so the extension's `claudeCode.environmentVariables`
   setting is honored). It appears only while a VS Code Claude session is open and updates within ~30 s.
+- **Follow VS Code** (on by default) makes the menu-bar title show the account VS Code is using
+  while a VS Code Claude session is open, and your **Show in Menu Bar** pick otherwise. Picking an
+  account that following would override turns it off.
 
 If you have been switching accounts with `/logout` → `/login`: keep your current login as the
 default profile, stop logging out, and add the other account with **Add Account…**. From then on,

@@ -44,8 +44,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// One state per monitored Claude account, in display order (default first).
     private var claudeStates: [ClaudeProfileState] = []
-    /// The profile whose usage the menu-bar title shows (Accounts ▸ Show in Menu Bar).
+    /// The manually picked menu-bar profile (Accounts ▸ Show in Menu Bar). `primary` may differ
+    /// while `followVSCode` is on and VS Code uses another profile.
     private var primaryID: String
+    /// Accounts ▸ Follow VS Code: the menu bar shows the account VS Code is using (default on).
+    private var followVSCode: Bool
     /// Set when accounts.json exists but cannot be parsed (it is then never overwritten).
     private var profilesError: String?
     /// Re-runs whichever menu layout was built last, so a background profile's poll can redraw
@@ -56,7 +59,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var vscodeTimer: Timer?
 
     private var primary: ClaudeProfileState {
-        claudeStates.first { $0.profile.id == primaryID } ?? claudeStates[0]
+        claudeStates.first { $0.profile.id == effectivePrimaryID(vscodeDirs) } ?? claudeStates[0]
+    }
+
+    /// The profile the menu-bar title shows for a given set of VS Code config dirs.
+    private func effectivePrimaryID(_ dirs: Set<String>) -> String {
+        Pulse.effectivePrimaryID(
+            manualID: primaryID, follow: followVSCode,
+            profiles: claudeStates.map { ($0.profile.id, $0.profile.home.configDir) }, vscodeDirs: dirs)
     }
     private var multiProfile: Bool { claudeStates.count > 1 }
 
@@ -122,6 +132,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // An absent key reads as false, which is the required default-off.
         autoWakeupEnabled = defaults.bool(forKey: "AutoWakeupEnabled")
         primaryID = defaults.string(forKey: "StatusProfile") ?? ClaudeProfile.defaultID
+        followVSCode = defaults.object(forKey: "FollowVSCode") as? Bool ?? true
         super.init()
         reloadProfiles()
         codexWakeup = Self.loadWakeupState(provider: "codex")
@@ -265,8 +276,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let dirs = readVSCodeConfigDirs() ?? []
             DispatchQueue.main.async {
                 guard let self, dirs != self.vscodeDirs else { return }
+                let before = self.primary
                 self.vscodeDirs = dirs
-                self.redrawMenu()
+                if self.primary !== before {
+                    self.renderPrimaryFromCache()  // Follow VS Code switched the menu-bar account
+                } else {
+                    self.redrawMenu()
+                }
             }
         }
     }
@@ -1072,6 +1088,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 it.state = state === primary ? .on : .off
                 it.indentationLevel = 1
             }
+            let follow = add("Follow VS Code", #selector(toggleFollowVSCode))
+            follow.state = followVSCode ? .on : .off
+            follow.indentationLevel = 1
+            follow.toolTip = "Show the account a VS Code Claude session is using"
             sub.addItem(.separator())
         }
         for state in extras {
@@ -1105,6 +1125,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let state = state(for: sender) else { return }
         primaryID = state.profile.id
         UserDefaults.standard.set(primaryID, forKey: "StatusProfile")
+        // A manual pick that Follow VS Code would override turns following off.
+        if followVSCode && effectivePrimaryID(vscodeDirs) != primaryID {
+            followVSCode = false
+            UserDefaults.standard.set(false, forKey: "FollowVSCode")
+        }
+        renderPrimaryFromCache()
+    }
+
+    @objc func toggleFollowVSCode() {
+        followVSCode.toggle()
+        UserDefaults.standard.set(followVSCode, forKey: "FollowVSCode")
         renderPrimaryFromCache()
     }
 
@@ -2489,6 +2520,19 @@ if CommandLine.arguments.contains("--selftest") {
           "vscodeConfigDirs: no VS Code sessions → empty")
     check(normalizedConfigDir("/a/b//") == "/a/b" && normalizedConfigDir("/") == "/",
           "normalizedConfigDir: trailing slashes")
+    let profs: [(id: String, configDir: String)] = [("default", "/u/.claude"), ("work", "/u/.claude-work/"), ("p", "/u/.claude-p")]
+    check(effectivePrimaryID(manualID: "p", follow: true, profiles: profs, vscodeDirs: ["/u/.claude"]) == "default",
+          "effectivePrimaryID: follows the VS Code profile over the manual pick")
+    check(effectivePrimaryID(manualID: "p", follow: false, profiles: profs, vscodeDirs: ["/u/.claude"]) == "p",
+          "effectivePrimaryID: follow off keeps the manual pick")
+    check(effectivePrimaryID(manualID: "p", follow: true, profiles: profs, vscodeDirs: []) == "p",
+          "effectivePrimaryID: no VS Code session keeps the manual pick")
+    check(effectivePrimaryID(manualID: "p", follow: true, profiles: profs, vscodeDirs: ["/u/.claude-work", "/u/.claude-p"]) == "p",
+          "effectivePrimaryID: manual pick wins among several VS Code profiles")
+    check(effectivePrimaryID(manualID: "default", follow: true, profiles: profs, vscodeDirs: ["/u/.claude-p", "/u/.claude-work"]) == "work",
+          "effectivePrimaryID: else first in display order (trailing slash normalized)")
+    check(effectivePrimaryID(manualID: "p", follow: true, profiles: profs, vscodeDirs: ["/u/other"]) == "p",
+          "effectivePrimaryID: an unmonitored VS Code dir is ignored")
 
     print(failures == 0 ? "ALL PASS" : "\(failures) FAILURE(S)")
     exit(failures == 0 ? 0 : 1)

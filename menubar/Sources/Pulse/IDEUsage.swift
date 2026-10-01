@@ -58,3 +58,15 @@ func readVSCodeConfigDirs() -> Set<String>? {
     let defaultDir = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".claude").path
     return vscodeConfigDirs(psOutput: text, defaultDir: defaultDir)
 }
+
+/// The profile the menu-bar title shows. With `follow` on and a VS Code session using one of the
+/// profiles, that profile wins — the manual pick if VS Code uses it too, else the first in display
+/// order; otherwise the manual pick (Accounts ▸ Show in Menu Bar). Pure.
+func effectivePrimaryID(
+    manualID: String, follow: Bool, profiles: [(id: String, configDir: String)], vscodeDirs: Set<String>
+) -> String {
+    guard follow else { return manualID }
+    let inUse = profiles.filter { vscodeDirs.contains(normalizedConfigDir($0.configDir)) }.map(\.id)
+    if inUse.contains(manualID) { return manualID }
+    return inUse.first ?? manualID
+}

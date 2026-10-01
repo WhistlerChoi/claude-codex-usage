@@ -45,6 +45,11 @@ processes with `CLAUDE_CODE_ENTRYPOINT=claude-vscode` and takes their `CLAUDE_CO
 `~/.claude`), compared after `normalizedConfigDir`. Don't switch this to `<configDir>/ide/*.lock`: the
 extension writes those from VS Code's own env, so they name the wrong dir when the account is chosen
 via the extension's `claudeCode.environmentVariables` setting.
+**Follow VS Code** (Accounts ▸, UserDefaults `FollowVSCode`, default on) makes the *effective*
+primary the profile VS Code uses (`effectivePrimaryID`, pure: the manual `StatusProfile` pick when
+VS Code uses it too, else the first in display order; no VS Code session → the manual pick). A
+manual pick it would override turns it off; a scan that changes the effective primary re-renders
+from cache (never polls).
 
 `menubar/` also contains `AutoWakeup.swift` (**menubar-only, deliberately not mirrored** to
 `src/`/`tray-go/`, like the Codex provider). Off by default. When the current 5h window has no
