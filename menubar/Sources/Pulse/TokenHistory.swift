@@ -261,9 +261,9 @@ func updateTokenHistory(
 }
 
 /// Per-provider entry points used by the poll loop.
-func readTokenStats() -> TokenStats? {
-    let root = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".claude/projects")
-    return updateTokenHistory(provider: "claude", root: root, extract: extractDailyTotals)
+func readTokenStats(profile: ClaudeProfile = .makeDefault()) -> TokenStats? {
+    updateTokenHistory(
+        provider: profile.ledgerProvider, root: profile.home.projectsURL, extract: extractDailyTotals)
 }
 
 func readCodexTokenStats() -> TokenStats? {

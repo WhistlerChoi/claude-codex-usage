@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { pct, statusBarText, formatResetIn, peakUtilization, tooltipMarkdown, nextRetryDelayMs, shouldShowStale, formatRetryIn } from "./format";
+import { pct, statusBarText, formatResetIn, peakUtilization, tooltipMarkdown, nextRetryDelayMs, shouldShowStale, formatRetryIn, planLabel, accountLine } from "./format";
 import { parseUsage, parseRetryAfterMs, type UsageData } from "./usageClient";
 
 // utilization is a percent (0-100)
@@ -210,4 +210,33 @@ test("tooltipMarkdown: no token rows and no toggle link when stats are absent", 
   const md = tooltipMarkdown(parseUsage(sampleRaw), new Date(), new Date(), { id: "m", name: "M" }, null, true);
   assert.ok(!md.includes("**Tokens"));
   assert.ok(!md.includes("pulse.toggleTokenHistory"));
+});
+
+test("planLabel: subscription type plus Max tier", () => {
+  assert.equal(planLabel("max", "default_claude_max_5x"), "Max 5x");
+  assert.equal(planLabel("max", "default_claude_max_20x"), "Max 20x");
+  assert.equal(planLabel("max", undefined), "Max");
+  assert.equal(planLabel("pro", "default_claude_pro"), "Pro");
+  assert.equal(planLabel("team", "default_claude_max_5x"), "Team (Max 5x)");
+  assert.equal(planLabel("enterprise", undefined), "Enterprise");
+  assert.equal(planLabel("free", undefined), "Free");
+  assert.equal(planLabel(undefined, "default_claude_max_20x"), "Max 20x");
+  assert.equal(planLabel(undefined, undefined), undefined);
+});
+
+test("accountLine: org name only for team / enterprise orgs", () => {
+  const team = { email: "a@example.com", orgName: "Acme", orgType: "claude_team" };
+  assert.equal(accountLine(team, "Team (Max 5x)"), "a@example.com · Team (Max 5x) · Acme");
+  assert.equal(accountLine({ email: "a@example.com", orgName: "a@example.com's Organization", orgType: "claude_max" }, "Max 20x"), "a@example.com · Max 20x");
+  assert.equal(accountLine(null, "Pro"), "Pro");
+  assert.equal(accountLine(null, undefined), null);
+});
+
+test("tooltipMarkdown: account line sits under the header, markdown-escaped", () => {
+  const md = tooltipMarkdown(parseUsage(sampleRaw), new Date(), new Date(), null, null, false, "a_b@example.com · Max 5x");
+  const lines = md.split("\n");
+  assert.equal(lines[2], "**Account**: a\\_b@example.com · Max 5x");
+  assert.equal(lines[3], "");
+  assert.ok(lines[4].startsWith("**5h**"));
+  assert.ok(!tooltipMarkdown(parseUsage(sampleRaw), new Date()).includes("**Account**"));
 });

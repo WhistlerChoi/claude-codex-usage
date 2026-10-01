@@ -32,6 +32,9 @@ struct ProviderSection {
     let rows: [UsageRow]
     let model: CurrentModel?   // shown at the right edge of the section header, if known
     var tokens: TokenStats? = nil   // local token stats (today / 7d / 30d), note lines under the table
+    var title: String? = nil   // header text; nil = the provider name ("Claude · Work" with profiles)
+    var account: String? = nil   // accountLine(), shown as the header's hover tooltip
+    var notes: [String] = []   // extra note lines above the table (stale warning, error, login hint)
 }
 
 enum UsageError: Error, LocalizedError {
@@ -123,7 +126,7 @@ func fetchUsage(token: String) async throws -> UsageData {
     return try parseUsage(json)
 }
 
-/// Process-lifetime cache of the most recently refreshed credentials.
+/// Process-lifetime cache of the most recently refreshed credentials, one slot per Claude home.
 ///
 /// Writeback can fail (e.g. the keychain ACL denies writes to Claude Code's item). Without this
 /// cache the freshly minted token would be dropped on the floor and the next poll would re-refresh
@@ -132,19 +135,20 @@ func fetchUsage(token: String) async throws -> UsageData {
 private final class RefreshedCredentialsCache {
     static let shared = RefreshedCredentialsCache()
     private let lock = NSLock()
-    private var cached: Credentials?
+    // Keyed by config dir: one account's rotated token must never be served for another.
+    private var cached: [String: Credentials] = [:]
 
-    func store(_ c: Credentials) {
+    func store(_ c: Credentials, home: ClaudeHome) {
         lock.lock()
-        cached = c
+        cached[home.configDir] = c
         lock.unlock()
     }
 
     /// The cached credentials if they are newer than `other`, otherwise nil.
-    func fresherThan(_ other: Credentials) -> Credentials? {
+    func fresherThan(_ other: Credentials, home: ClaudeHome) -> Credentials? {
         lock.lock()
         defer { lock.unlock() }
-        guard let cached = cached else { return nil }
+        guard let cached = cached[home.configDir] else { return nil }
         return (cached.expiresAtMs ?? 0) > (other.expiresAtMs ?? 0) ? cached : nil
     }
 }
@@ -163,10 +167,10 @@ private func usageError(forFailedRefresh error: Error) -> UsageError {
 /// token (~8h life) is refreshed from the stored refresh token, exactly as Claude Code does.
 /// Credentials that are safe to spend a request on, refreshing first when at/near expiry.
 /// Extracted so every caller that needs a token shares one copy of the expiry rules.
-private func currentCredentials() async throws -> Credentials {
-    var creds = try readCredentials()
+private func currentCredentials(home: ClaudeHome) async throws -> Credentials {
+    var creds = try readCredentials(home: home)
     // A refresh whose writeback failed lives only in memory; prefer it over the stores' older copy.
-    if let cached = RefreshedCredentialsCache.shared.fresherThan(creds) {
+    if let cached = RefreshedCredentialsCache.shared.fresherThan(creds, home: home) {
         creds = cached
     }
 
@@ -175,7 +179,7 @@ private func currentCredentials() async throws -> Credentials {
     if let exp = creds.expiresAtMs, nowMs >= exp - 300_000 {  // within 5 minutes of expiry
         if let rt = creds.refreshToken {
             do {
-                creds = try await performRefresh(rt, source: creds.source)
+                creds = try await performRefresh(rt, from: creds, home: home)
             } catch {
                 // Already past expiry: the token cannot work, and repeated dead-token requests are
                 // what make the endpoint answer 429 instead of 401. Report instead of trying.
@@ -191,31 +195,37 @@ private func currentCredentials() async throws -> Credentials {
 
 /// A token that is safe to send right now. Same discipline as `fetchUsageAutoRefreshing`;
 /// callers must not re-implement the expiry handling.
-func currentAccessToken() async throws -> String {
-    try await currentCredentials().accessToken
+func currentAccessToken(home: ClaudeHome = claudeHome()) async throws -> String {
+    try await currentCredentials(home: home).accessToken
 }
 
-func fetchUsageAutoRefreshing() async throws -> UsageData {
-    let creds = try await currentCredentials()
+/// The usage plus the credentials it was fetched with (their plan fields feed the account line).
+func fetchUsageAutoRefreshing(
+    home: ClaudeHome = claudeHome()
+) async throws -> (usage: UsageData, credentials: Credentials) {
+    let creds = try await currentCredentials(home: home)
 
     do {
-        return try await fetchUsage(token: creds.accessToken)
+        return (try await fetchUsage(token: creds.accessToken), creds)
     } catch UsageError.auth {
         // Reactive: token rejected (e.g. Claude Code rotated it, or clock skew). Refresh once, retry.
         guard let rt = creds.refreshToken else { throw UsageError.auth }
         let refreshed: Credentials
         do {
-            refreshed = try await performRefresh(rt, source: creds.source)
+            refreshed = try await performRefresh(rt, from: creds, home: home)
         } catch {
             throw usageError(forFailedRefresh: error)
         }
-        return try await fetchUsage(token: refreshed.accessToken)
+        return (try await fetchUsage(token: refreshed.accessToken), refreshed)
     }
 }
 
 /// Refresh the access token and persist it back to its source. Writeback failure is logged but
 /// non-fatal so the current poll still succeeds with the freshly minted token.
-private func performRefresh(_ refreshToken: String, source: CredentialSource) async throws -> Credentials {
+private func performRefresh(
+    _ refreshToken: String, from old: Credentials, home: ClaudeHome
+) async throws -> Credentials {
+    let source = old.source
     let t = try await refreshAccessToken(refreshToken)
     do {
         try writeCredentials(
@@ -227,8 +237,9 @@ private func performRefresh(_ refreshToken: String, source: CredentialSource) as
     }
     let refreshed = Credentials(
         accessToken: t.accessToken, refreshToken: t.refreshToken,
-        expiresAtMs: t.expiresAtMs, source: source)
+        expiresAtMs: t.expiresAtMs, source: source,
+        subscriptionType: old.subscriptionType, rateLimitTier: old.rateLimitTier)
     // Keep the rotation even if writeback failed, so the next poll does not reuse a revoked token.
-    RefreshedCredentialsCache.shared.store(refreshed)
+    RefreshedCredentialsCache.shared.store(refreshed, home: home)
     return refreshed
 }

@@ -6,19 +6,81 @@ func colorForPercent(_ percent: Int) -> NSColor? {
     return nil
 }
 
+/// Everything Pulse knows about one monitored Claude account profile. Each profile polls on its
+/// own timer with its own backoff, so one account's failure never stalls another's.
+final class ClaudeProfileState {
+    let profile: ClaudeProfile
+    var usage: UsageData?
+    var model: CurrentModel?
+    var tokens: TokenStats?
+    var account: AccountInfo?
+    var accountText: String?   // accountLine(), "email · plan · org"
+    var updated: Date?
+    var lastSuccessAt: Date?
+    var lastError: Error?
+    var consecutiveFailures = 0
+    var inFlight = false
+    var timer: Timer?
+    var wakeup: WakeupState
+    var wakeupInFlight = false
+
+    init(profile: ClaudeProfile, wakeup: WakeupState) {
+        self.profile = profile
+        self.wakeup = wakeup
+    }
+
+    /// Only an auth / credentials failure may ask for a login (see CLAUDE.md error contract).
+    var loginNeeded: Bool {
+        if lastError is CredentialsError { return true }
+        if case UsageError.auth? = lastError as? UsageError { return true }
+        return false
+    }
+}
+
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
-    private var timer: Timer?
     private var codexTimer: Timer?
     private let interval: TimeInterval
 
-    private var lastUsage: UsageData?
-    private var lastModel: CurrentModel?
-    private var lastTokens: TokenStats?
-    private var lastClaudeUpdated: Date?
-    private var lastSuccessAt: Date?
-    private var consecutiveFailures = 0
-    private var inFlight = false
+    /// One state per monitored Claude account, in display order (default first).
+    private var claudeStates: [ClaudeProfileState] = []
+    /// The profile whose usage the menu-bar title shows (Accounts ▸ Show in Menu Bar).
+    private var primaryID: String
+    /// Set when accounts.json exists but cannot be parsed (it is then never overwritten).
+    private var profilesError: String?
+    /// Re-runs whichever menu layout was built last, so a background profile's poll can redraw
+    /// its section without disturbing the primary profile's current presentation.
+    private var lastMenuBuild: (() -> Void)?
+
+    private var primary: ClaudeProfileState {
+        claudeStates.first { $0.profile.id == primaryID } ?? claudeStates[0]
+    }
+    private var multiProfile: Bool { claudeStates.count > 1 }
+
+    /// The non-primary profiles to show, skipping any logged into the same account (and org) as
+    /// one shown before it — two profiles on one login would just repeat the same numbers.
+    private var secondaries: [ClaudeProfileState] {
+        var seen = Set<String>()
+        if let id = primary.account?.identity { seen.insert(id) }
+        var out: [ClaudeProfileState] = []
+        for state in claudeStates where state !== primary {
+            if let id = state.account?.identity {
+                if seen.contains(id) { continue }
+                seen.insert(id)
+            }
+            out.append(state)
+        }
+        return out
+    }
+
+    // The primary profile's state, under the names the single-account paths have always used.
+    private var lastUsage: UsageData? { primary.usage }
+    private var lastSuccessAt: Date? { primary.lastSuccessAt }
+    private var consecutiveFailures: Int {
+        get { primary.consecutiveFailures }
+        set { primary.consecutiveFailures = newValue }
+    }
+
     private var aboutWindow: NSWindow?
     private var lastCodexUsage: CodexUsage?
     private var lastCodexModel: CurrentModel?
@@ -30,9 +92,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // Auto Wakeup: off unless the user turns it on. State is persisted so quitting and
     // relaunching cannot reset the cooldown and re-send.
     private var autoWakeupEnabled: Bool
-    private var claudeWakeup = WakeupState()
     private var codexWakeup = WakeupState()
-    private var claudeWakeupInFlight = false
     private var codexWakeupInFlight = false
 
     // Two-line display fine-tuning (adjustable via env vars, no rebuild needed)
@@ -58,9 +118,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             num("CLAUDE_USAGE_FONT_WEIGHT", "FontWeight", Double(NSFont.Weight.bold.rawValue)))
         // An absent key reads as false, which is the required default-off.
         autoWakeupEnabled = defaults.bool(forKey: "AutoWakeupEnabled")
+        primaryID = defaults.string(forKey: "StatusProfile") ?? ClaudeProfile.defaultID
         super.init()
-        claudeWakeup = Self.loadWakeupState(provider: "claude")
+        reloadProfiles()
         codexWakeup = Self.loadWakeupState(provider: "codex")
+    }
+
+    /// (Re)build the profile list: the default home plus `$PULSE_HOME/accounts.json`. States of
+    /// profiles that still exist are kept, so a reload never loses usage or backoff.
+    private func reloadProfiles() {
+        var profiles = [ClaudeProfile.makeDefault()]
+        do {
+            profiles += try loadExtraProfiles().prefix(maxClaudeProfiles - 1)
+            profilesError = nil
+        } catch {
+            profilesError = error.localizedDescription
+        }
+        let old = claudeStates
+        claudeStates = profiles.map { p in
+            old.first { $0.profile == p }
+                ?? ClaudeProfileState(profile: p, wakeup: Self.loadWakeupState(provider: p.wakeupKey))
+        }
+        for state in old where !claudeStates.contains(where: { $0 === state }) {
+            state.timer?.invalidate()
+        }
+        if !claudeStates.contains(where: { $0.profile.id == primaryID }) {
+            primaryID = ClaudeProfile.defaultID
+        }
     }
 
     private static func loadWakeupState(provider: String) -> WakeupState {
@@ -84,26 +168,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Evaluate and, if warranted, send one wakeup. Called only from a successful poll, on the
     /// main actor. Every failure path here is silent: a wakeup must never touch the usage
     /// display, and must never be reported as a login problem.
-    private func maybeWakeUpClaude(resetsAt: String?) {
+    private func maybeWakeUpClaude(_ state: ClaudeProfileState, resetsAt: String?) {
         let parsed = resetsAt.flatMap(parseISODate)
-        if let parsed { claudeWakeup.lastWindowResetsAt = parsed }
+        let key = state.profile.wakeupKey
+        if let parsed { state.wakeup.lastWindowResetsAt = parsed }
         guard shouldWakeUp(enabled: autoWakeupEnabled, resetsAt: parsed,
-                           state: claudeWakeup, inFlight: claudeWakeupInFlight) else {
-            saveWakeupState(claudeWakeup, provider: "claude")
+                           state: state.wakeup, inFlight: state.wakeupInFlight) else {
+            saveWakeupState(state.wakeup, provider: key)
             return
         }
-        claudeWakeupInFlight = true
+        state.wakeupInFlight = true
         // Recorded before the request goes out, so a crash mid-flight still costs the cooldown.
-        claudeWakeup = stateAfterWakeup(claudeWakeup, resetsAt: parsed)
-        saveWakeupState(claudeWakeup, provider: "claude")
-        Task.detached { [weak self] in
+        state.wakeup = stateAfterWakeup(state.wakeup, resetsAt: parsed)
+        saveWakeupState(state.wakeup, provider: key)
+        let home = state.profile.home
+        Task.detached {
             do {
-                try await sendClaudeWakeup()
+                try await sendClaudeWakeup(home: home)
             } catch {
                 FileHandle.standardError.write(
-                    "pulse: claude wakeup failed: \(error)\n".data(using: .utf8)!)
+                    "pulse: claude wakeup failed (\(key)): \(error)\n".data(using: .utf8)!)
             }
-            await MainActor.run { self?.claudeWakeupInFlight = false }
+            await MainActor.run { state.wakeupInFlight = false }
         }
     }
 
@@ -142,10 +228,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         refreshAutoWakeupRow()
     }
 
-    /// One row covers both providers, so its "last HH:MM" is the later of the two attempts.
+    /// One row covers every provider and profile, so its "last HH:MM" is the latest attempt.
     private var combinedWakeupState: WakeupState {
-        WakeupState(lastWakeupAt: latestDate(claudeWakeup.lastWakeupAt, codexWakeup.lastWakeupAt),
-                    lastWindowResetsAt: nil)
+        let last = claudeStates.reduce(codexWakeup.lastWakeupAt) { latestDate($0, $1.wakeup.lastWakeupAt) }
+        return WakeupState(lastWakeupAt: last, lastWindowResetsAt: nil)
     }
 
     /// Update the live Auto Wakeup row (label colour and text) without rebuilding the menu.
@@ -172,27 +258,48 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         refreshCodex()
     }
 
+    /// Poll every Claude profile. Extra profiles are staggered, so several accounts never hit the
+    /// usage endpoint in one burst.
     @objc func refresh() {
-        if inFlight { return }
-        inFlight = true
+        for (i, state) in claudeStates.enumerated() {
+            if i == 0 {
+                refresh(state)
+            } else {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2 * Double(i)) { [weak self] in
+                    self?.refresh(state)
+                }
+            }
+        }
+    }
+
+    private func refresh(_ state: ClaudeProfileState) {
+        if state.inFlight { return }
+        state.inFlight = true
+        let profile = state.profile
         Task.detached { [weak self] in
             guard let self else { return }
             do {
-                let usage = try await fetchUsageAutoRefreshing()
-                let model = readCurrentModel()
-                let tokens = readTokenStats()
+                let (usage, creds) = try await fetchUsageAutoRefreshing(home: profile.home)
+                let model = readCurrentModel(root: profile.home.projectsURL)
+                let tokens = readTokenStats(profile: profile)
+                let account = readAccountInfo(home: profile.home)
+                let plan = planLabel(subscriptionType: creds.subscriptionType, rateLimitTier: creds.rateLimitTier)
                 await MainActor.run {
-                    self.inFlight = false
-                    self.renderUsage(usage, model, tokens)
-                    self.maybeWakeUpClaude(resetsAt: usage.fiveHour.resetsAt)
-                    self.lastSuccessAt = Date()
-                    self.consecutiveFailures = 0
-                    self.scheduleNext(self.interval)
+                    state.inFlight = false
+                    state.lastError = nil
+                    state.account = account
+                    state.accountText = accountLine(account, plan: plan)
+                    self.renderUsage(state, usage, model, tokens)
+                    self.maybeWakeUpClaude(state, resetsAt: usage.fiveHour.resetsAt)
+                    state.lastSuccessAt = Date()
+                    state.consecutiveFailures = 0
+                    self.scheduleNext(state, self.interval)
                 }
             } catch {
                 await MainActor.run {
-                    self.inFlight = false
-                    self.scheduleNext(self.handleError(error))
+                    state.inFlight = false
+                    state.lastError = error
+                    self.scheduleNext(state, self.handleError(error, for: state))
                 }
             }
         }
@@ -226,10 +333,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    private func scheduleNext(_ delay: TimeInterval) {
-        timer?.invalidate()
-        timer = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { [weak self] _ in
-            self?.refresh()
+    private func scheduleNext(_ state: ClaudeProfileState, _ delay: TimeInterval) {
+        state.timer?.invalidate()
+        // A profile removed while its poll was in flight must not start polling again.
+        guard claudeStates.contains(where: { $0 === state }) else { return }
+        state.timer = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { [weak self] _ in
+            self?.refresh(state)
         }
     }
 
@@ -245,7 +354,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc func login() {
-        openTerminal(command: "claude")
+        openTerminal(command: claudeCommand(for: primary.profile))
+    }
+
+    /// "Log In via Claude Code" under a non-primary profile's section.
+    @objc func loginProfile(_ sender: NSMenuItem) {
+        guard let state = state(for: sender) else { return }
+        openTerminal(command: claudeCommand(for: state.profile))
     }
 
     @objc func loginCodex() {
@@ -256,7 +371,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let script = """
         tell application "Terminal"
             activate
-            do script "\(command)"
+            do script "\(appleScriptEscaped(command))"
         end tell
         """
         var err: NSDictionary?
@@ -361,8 +476,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let desc = label(
             "Shows Claude Code and Codex usage\nin your menu bar.",
             size: 12, color: .labelColor)
+        let dataDirs = claudeStates
+            .map { ($0.profile.home.configDir as NSString).abbreviatingWithTildeInPath }
+            .joined(separator: ", ")
         let meta = label(
-            "Data: ~/.claude · /usage API   ·   Poll interval: \(Int(interval))s",
+            "Data: \(dataDirs) · /usage API   ·   Poll interval: \(Int(interval))s",
             size: 11, color: .secondaryLabelColor)
 
         // Copyright doubles as the company link → https://agle.xyz
@@ -514,23 +632,71 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Rendering
 
-    /// Store a fresh Claude result and redraw. Only this path moves the Claude timestamp.
-    private func renderUsage(_ usage: UsageData, _ model: CurrentModel?, _ tokens: TokenStats?) {
-        lastUsage = usage
-        lastModel = model
-        lastTokens = tokens
-        lastClaudeUpdated = Date()
-        renderAll()
+    /// Store a fresh Claude result and redraw. Only this path moves a Claude timestamp.
+    private func renderUsage(
+        _ state: ClaudeProfileState, _ usage: UsageData, _ model: CurrentModel?, _ tokens: TokenStats?
+    ) {
+        state.usage = usage
+        state.model = model
+        state.tokens = tokens
+        state.updated = Date()
+        if state === primary {
+            renderAll()
+        } else {
+            redrawMenu()
+        }
     }
 
-    /// Redraw the status item and dropdown from cached state (both providers). Used by the
-    /// Codex paths too, so a Codex-only poll never touches the Claude "Updated" time.
-    private func renderAll() {
-        guard let usage = lastUsage else { return }
-        let model = lastModel
+    /// Rebuild the dropdown in its current layout (a background profile changed).
+    private func redrawMenu() {
+        if let build = lastMenuBuild {
+            build()
+        } else if lastUsage != nil {
+            renderAll()
+        }
+    }
 
-        renderPrimaryDisplay()
+    /// Redraw for a new primary profile from cached state only — switching never polls.
+    private func renderPrimaryFromCache() {
+        if lastUsage != nil {
+            renderAll()
+        } else if let error = primary.lastError {
+            if primary.loginNeeded {
+                setStacked(top: "Login", bottom: "needed", color: .systemRed)
+            } else {
+                setStacked(top: "··", bottom: "··", color: .systemGray)
+            }
+            rebuildMenu(detailLines: [primaryErrorLine(error)], showLogin: primary.loginNeeded)
+        } else {
+            setStacked(top: "··", bottom: "··", color: nil)
+            rebuildMenu(detailLines: ["Loading..."])
+        }
+    }
 
+    /// The primary profile's error text, naming the profile once there is more than one.
+    private func primaryErrorLine(_ error: Error) -> String {
+        multiProfile ? "\(primary.profile.label): \(error.localizedDescription)" : error.localizedDescription
+    }
+
+    /// One Claude profile's dropdown section. Status notes (stale / error / loading) are only
+    /// added for non-primary profiles; the primary's status keeps its own whole-menu paths.
+    private func claudeSection(_ state: ClaudeProfileState, withStatus: Bool) -> ProviderSection {
+        var notes: [String] = []
+        if withStatus {
+            if state.usage == nil {
+                notes.append(state.lastError?.localizedDescription ?? "Loading...")
+            } else if state.lastError != nil {
+                let age = state.lastSuccessAt.map { Date().timeIntervalSince($0) } ?? .greatestFiniteMagnitude
+                if shouldShowStale(age, interval) { notes.append("⚠ Refresh failed — showing last value") }
+            }
+        }
+        return ProviderSection(
+            rows: state.usage.map(claudeRows) ?? [], model: state.model, tokens: state.tokens,
+            title: multiProfile ? "\(Provider.claude.displayName) · \(state.profile.label)" : nil,
+            account: state.accountText, notes: notes)
+    }
+
+    private func claudeRows(_ usage: UsageData) -> [UsageRow] {
         var claudeRows: [UsageRow] = [
             UsageRow(label: "5h", pct: pct(usage.fiveHour.utilization),
                      reset: formatResetDuration(usage.fiveHour.resetsAt)),
@@ -552,6 +718,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             claudeRows.append(UsageRow(label: "Weekly \(scoped.model)", pct: pct(scoped.window.utilization),
                                  reset: formatResetDuration(scoped.window.resetsAt)))
         }
+        return claudeRows
+    }
+
+    /// Redraw the status item and dropdown from cached state (all providers). Used by the
+    /// Codex paths too, so a Codex-only poll never touches a Claude "Updated" time.
+    private func renderAll() {
+        guard lastUsage != nil else { return }
+
+        renderPrimaryDisplay()
+
         var codexSection: ProviderSection?
         if let codex = lastCodexUsage {
             var codexRows = [
@@ -565,10 +741,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             codexSection = ProviderSection(rows: codexRows, model: lastCodexModel, tokens: lastCodexTokens)
         }
 
+        let claudeUpdated = claudeStates.reduce(nil as Date?) { latestDate($0, $1.updated) }
         rebuildMenu(
-            claude: ProviderSection(rows: claudeRows, model: model, tokens: lastTokens),
+            claude: claudeSection(primary, withStatus: false),
             codex: codexSection,
-            updatedAt: latestDate(lastClaudeUpdated, lastCodexUpdated),
+            updatedAt: latestDate(claudeUpdated, lastCodexUpdated),
             showCodexLogin: codexLoginNeeded)
     }
 
@@ -601,11 +778,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// A failed poll of one profile: the primary drives the whole display, any other profile only
+    /// its own section. Returns the delay (seconds) until that profile's next poll.
+    private func handleError(_ error: Error, for state: ClaudeProfileState) -> TimeInterval {
+        if state === primary { return handleError(error) }
+        let delay: TimeInterval
+        if state.loginNeeded {
+            state.consecutiveFailures = 0
+            delay = interval
+        } else {
+            state.consecutiveFailures += 1
+            delay = nextRetryDelay(state.consecutiveFailures, interval, retryAfter(from: error))
+        }
+        redrawMenu()
+        return delay
+    }
+
     /// Update the error display and return the delay (seconds) until the next poll.
     private func handleError(_ error: Error) -> TimeInterval {
         if error is CredentialsError || isAuthError(error) {
             setStacked(top: "Login", bottom: "needed", color: .systemRed)
-            rebuildMenu(detailLines: [error.localizedDescription], showLogin: true)
+            rebuildMenu(detailLines: [primaryErrorLine(error)], showLogin: true)
             consecutiveFailures = 0
             return interval
         }
@@ -623,14 +816,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             )
             rebuildMenu(detailLines: [
                 "⚠ Refresh failed — showing last value",
-                error.localizedDescription,
+                primaryErrorLine(error),
             ])
         } else {
             // No value to fall back on. This is a transient failure (network, HTTP 429), NOT an
             // auth problem: show a neutral placeholder and no Login item, so the user is not sent
             // on a pointless login round trip that cannot fix a rate limit.
             setStacked(top: "··", bottom: "··", color: .systemGray)
-            rebuildMenu(detailLines: [error.localizedDescription, formatRetryIn(delay)])
+            rebuildMenu(detailLines: [primaryErrorLine(error), formatRetryIn(delay)])
         }
         return delay
     }
@@ -687,6 +880,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// Plain text rows (used by the error / auth / "Loading..." paths). Not column-aligned.
     private func rebuildMenu(detailLines: [String], showLogin: Bool = false, showCodexLogin: Bool = false) {
+        lastMenuBuild = { [weak self] in
+            self?.rebuildMenu(detailLines: detailLines, showLogin: showLogin, showCodexLogin: showCodexLogin)
+        }
         let menu = NSMenu()
         menu.autoenablesItems = false  // so the info lines are not shown dimmed (disabled)
         for line in detailLines {
@@ -701,8 +897,44 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             )
             menu.addItem(item)
         }
+        let others = secondaries.map { ($0, claudeSection($0, withStatus: true)) }
+        let widths = usageTableColumnWidths(sections: others.map { $0.1.rows })
+        for (state, section) in others {
+            menu.addItem(.separator())
+            appendSection(to: menu, .claude, section, widths: widths, caption: false, loginFor: state)
+        }
         appendInteractiveItems(to: menu, showLogin: showLogin, showCodexLogin: showCodexLogin)
         statusItem.menu = menu
+    }
+
+    /// One provider section: header, account note, status notes, usage table, tokens row, and —
+    /// for a non-primary profile that needs it — its own login item.
+    private func appendSection(
+        to menu: NSMenu, _ provider: Provider, _ section: ProviderSection,
+        widths: (label: CGFloat, pct: CGFloat, reset: CGFloat), caption: Bool, loginFor state: ClaudeProfileState? = nil
+    ) {
+        // The account line is long, so it rides on the header as a hover tooltip, not a row.
+        menu.addItem(makeProviderHeaderItem(
+            provider, model: section.model, title: section.title, toolTip: section.account))
+        for note in section.notes { menu.addItem(makeNoteItem(note)) }
+        if !section.rows.isEmpty {
+            let tableItem = NSMenuItem()
+            tableItem.isEnabled = true
+            tableItem.view = makeUsageTableView(
+                rows: section.rows, columnWidths: widths, captionResetColumn: caption)
+            menu.addItem(tableItem)
+        }
+        if let tokens = section.tokens {
+            menu.addItem(makeTokensItem(tokens))
+        }
+        if let state, state.loginNeeded {
+            let item = NSMenuItem(
+                title: "Log In via Claude Code", action: #selector(loginProfile(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = state.profile.id
+            item.indentationLevel = 1
+            menu.addItem(item)
+        }
     }
 
     /// One section per provider: header (icon + name, current model at the right edge) and
@@ -712,31 +944,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func rebuildMenu(
         claude: ProviderSection, codex: ProviderSection?, updatedAt: Date?, showCodexLogin: Bool = false
     ) {
+        lastMenuBuild = { [weak self] in self?.renderAll() }  // re-reads every profile's state
         let menu = NSMenu()
         menu.autoenablesItems = false
 
-        // One measurement over every row of both providers: each section's table is its own
+        let others = secondaries.map { ($0, claudeSection($0, withStatus: true)) }
+        // One measurement over every row of every section: each section's table is its own
         // NSGridView, so without a shared width their columns would be sized independently
         // and the reset column would start at a different x in each section.
-        let widths = usageTableColumnWidths(sections: [claude.rows, codex?.rows ?? []])
+        let widths = usageTableColumnWidths(
+            sections: [claude.rows, codex?.rows ?? []] + others.map { $0.1.rows })
 
         // The "resets in" column caption is drawn once, over the first table only.
-        func addSection(_ provider: Provider, _ section: ProviderSection, caption: Bool) {
-            menu.addItem(makeProviderHeaderItem(provider, model: section.model))
-            let tableItem = NSMenuItem()
-            tableItem.isEnabled = true
-            tableItem.view = makeUsageTableView(
-                rows: section.rows, columnWidths: widths, captionResetColumn: caption)
-            menu.addItem(tableItem)
-            if let tokens = section.tokens {
-                menu.addItem(makeTokensItem(tokens))
-            }
+        appendSection(to: menu, .claude, claude, widths: widths, caption: true)
+        for (state, section) in others {
+            menu.addItem(.separator())
+            appendSection(to: menu, .claude, section, widths: widths, caption: false, loginFor: state)
         }
-
-        addSection(.claude, claude, caption: true)
         if let codex {
             menu.addItem(.separator())
-            addSection(.codex, codex, caption: false)
+            appendSection(to: menu, .codex, codex, widths: widths, caption: false)
         }
         appendInteractiveItems(
             to: menu, showLogin: false, showCodexLogin: showCodexLogin, updatedAt: updatedAt)
@@ -765,6 +992,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             loginItem.target = self
             menu.addItem(loginItem)
         }
+        menu.addItem(makeAccountsItem())
         let aboutItem = NSMenuItem(title: "About", action: #selector(showAbout), keyEquivalent: "")
         aboutItem.target = self
         menu.addItem(aboutItem)
@@ -778,6 +1006,179 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         quitItem.target = self
         menu.addItem(quitItem)
     }
+
+    // MARK: - Accounts (multi-profile)
+
+    private func state(for sender: NSMenuItem) -> ClaudeProfileState? {
+        guard let id = sender.representedObject as? String else { return nil }
+        return claudeStates.first { $0.profile.id == id }
+    }
+
+    /// Accounts ▸ — which profile the menu bar shows, per-profile shortcuts, add / remove.
+    private func makeAccountsItem() -> NSMenuItem {
+        let item = NSMenuItem(title: "Accounts", action: nil, keyEquivalent: "")
+        let sub = NSMenu()
+        sub.autoenablesItems = false
+        func add(_ title: String, _ action: Selector?, id: String? = nil, enabled: Bool = true) -> NSMenuItem {
+            let it = NSMenuItem(title: title, action: action, keyEquivalent: "")
+            it.target = self
+            it.representedObject = id
+            it.isEnabled = enabled
+            sub.addItem(it)
+            return it
+        }
+        let extras = claudeStates.filter { !$0.profile.isDefault }
+        if multiProfile {
+            _ = add("Show in Menu Bar", nil, enabled: false)
+            for state in claudeStates {
+                let email = state.account.map { " — \($0.email)" } ?? ""
+                let it = add(state.profile.label + email, #selector(selectPrimary(_:)), id: state.profile.id)
+                it.state = state === primary ? .on : .off
+                it.indentationLevel = 1
+            }
+            sub.addItem(.separator())
+        }
+        for state in extras {
+            _ = add("Open Claude Code (\(state.profile.label))", #selector(openProfile(_:)), id: state.profile.id)
+            _ = add("Copy Shell Alias (\(state.profile.label))", #selector(copyAlias(_:)), id: state.profile.id)
+        }
+        if !extras.isEmpty { sub.addItem(.separator()) }
+        _ = add("Add Account…", #selector(addAccount),
+                enabled: profilesError == nil && claudeStates.count < maxClaudeProfiles)
+        if !extras.isEmpty {
+            let remove = NSMenuItem(title: "Remove Account", action: nil, keyEquivalent: "")
+            let removeMenu = NSMenu()
+            for state in extras {
+                let it = NSMenuItem(title: state.profile.label, action: #selector(removeAccount(_:)), keyEquivalent: "")
+                it.target = self
+                it.representedObject = state.profile.id
+                removeMenu.addItem(it)
+            }
+            remove.submenu = removeMenu
+            sub.addItem(remove)
+        }
+        if let profilesError {
+            sub.addItem(.separator())
+            sub.addItem(makeNoteItem(profilesError))
+        }
+        item.submenu = sub
+        return item
+    }
+
+    @objc func selectPrimary(_ sender: NSMenuItem) {
+        guard let state = state(for: sender) else { return }
+        primaryID = state.profile.id
+        UserDefaults.standard.set(primaryID, forKey: "StatusProfile")
+        renderPrimaryFromCache()
+    }
+
+    @objc func openProfile(_ sender: NSMenuItem) {
+        guard let state = state(for: sender) else { return }
+        openTerminal(command: claudeCommand(for: state.profile))
+    }
+
+    @objc func copyAlias(_ sender: NSMenuItem) {
+        guard let state = state(for: sender) else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(shellAlias(for: state.profile), forType: .string)
+    }
+
+    private func showAlert(_ title: String, _ text: String, style: NSAlert.Style = .warning) {
+        let alert = NSAlert()
+        alert.alertStyle = style
+        alert.messageText = title
+        alert.informativeText = text
+        NSApp.activate(ignoringOtherApps: true)
+        alert.runModal()
+    }
+
+    /// Create (or adopt) `~/.claude-<name>` as a new profile and open Claude Code there to log in.
+    /// Pulse never copies or swaps credentials: each account keeps its own Claude Code login.
+    @objc func addAccount() {
+        let alert = NSAlert()
+        alert.messageText = "Add Claude Account"
+        alert.informativeText = """
+            Each account gets its own Claude Code profile (CLAUDE_CONFIG_DIR), so every account \
+            stays logged in at the same time. Enter a short name, such as "personal" or "work". \
+            Claude Code then opens in Terminal so you can log in.
+            """
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 260, height: 24))
+        field.placeholderString = "personal"
+        alert.accessoryView = field
+        alert.addButton(withTitle: "Add & Log In")
+        alert.addButton(withTitle: "Cancel")
+        alert.window.initialFirstResponder = field
+        NSApp.activate(ignoringOtherApps: true)
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+
+        let label = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        let id = profileSlug(label)
+        guard isValidProfileID(id), !claudeStates.contains(where: { $0.profile.id == id }) else {
+            showAlert("Choose a different name",
+                      "Use letters or digits, and a name that is not \"default\" or already in use.")
+            return
+        }
+        let dir = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".claude-\(id)")
+        let profile = ClaudeProfile(id: id, label: label, home: ClaudeHome(configDir: dir.path, custom: true))
+        do {
+            try FileManager.default.createDirectory(
+                at: dir, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+            try saveExtraProfiles(claudeStates.map(\.profile) + [profile])
+        } catch {
+            showAlert("Could not add the account", error.localizedDescription)
+            return
+        }
+        reloadProfiles()
+        renderPrimaryFromCache()
+        if let state = claudeStates.first(where: { $0.profile.id == id }) { refresh(state) }
+        openTerminal(command: claudeCommand(for: profile))
+
+        let done = NSAlert()
+        done.alertStyle = .informational
+        done.messageText = "Log in to \(label) in Terminal"
+        done.informativeText = """
+            When the login finishes, choose Refresh Now. To use this account from a shell later, \
+            add this alias to your shell profile:
+
+            \(shellAlias(for: profile))
+            """
+        done.addButton(withTitle: "Copy Alias")
+        done.addButton(withTitle: "OK")
+        NSApp.activate(ignoringOtherApps: true)
+        if done.runModal() == .alertFirstButtonReturn {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(shellAlias(for: profile), forType: .string)
+        }
+    }
+
+    /// Stop monitoring a profile. Its directory and Claude Code login are left untouched.
+    @objc func removeAccount(_ sender: NSMenuItem) {
+        guard let state = state(for: sender) else { return }
+        let alert = NSAlert()
+        alert.messageText = "Remove \(state.profile.label) from Pulse?"
+        alert.informativeText = """
+            Pulse stops showing this account. Its Claude Code profile \
+            (\((state.profile.home.configDir as NSString).abbreviatingWithTildeInPath)) and login are \
+            left as they are.
+            """
+        alert.addButton(withTitle: "Remove")
+        alert.addButton(withTitle: "Cancel")
+        NSApp.activate(ignoringOtherApps: true)
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        do {
+            try saveExtraProfiles(claudeStates.map(\.profile).filter { $0.id != state.profile.id })
+        } catch {
+            showAlert("Could not remove the account", error.localizedDescription)
+            return
+        }
+        reloadProfiles()
+        renderPrimaryFromCache()
+    }
+}
+
+/// Escape a string for use inside an AppleScript double-quoted literal. Pure.
+func appleScriptEscaped(_ s: String) -> String {
+    s.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"")
 }
 
 /// De-emphasized note row under a provider's usage table: "Tokens today: 1.2M in · 48K out ·
@@ -938,10 +1339,19 @@ func makeAutoWakeupItem(
     return item
 }
 
-func makeProviderHeaderItem(_ provider: Provider, model: CurrentModel?) -> NSMenuItem {
+func makeProviderHeaderItem(
+    _ provider: Provider, model: CurrentModel?, title: String? = nil, toolTip: String? = nil
+) -> NSMenuItem {
     let item = NSMenuItem()
     item.isEnabled = true
-    item.view = makeProviderHeaderView(provider, model: model)
+    let view = makeProviderHeaderView(provider, model: model, title: title)
+    if let toolTip {
+        // A view-backed item shows the tooltip of the view under the mouse, so tag every subview.
+        item.toolTip = toolTip
+        view.toolTip = toolTip
+        for sub in view.subviews { sub.toolTip = toolTip }
+    }
+    item.view = view
     return item
 }
 
@@ -949,7 +1359,7 @@ func makeProviderHeaderItem(_ provider: Provider, model: CurrentModel?) -> NSMen
 /// both de-emphasized like the note lines. AppKit stretches a menu item's view to the menu's
 /// width, so the trailing-pinned model label lands at the right edge whichever item is widest.
 /// A free function so the offscreen `--menu` render can build it without an AppDelegate.
-func makeProviderHeaderView(_ provider: Provider, model: CurrentModel?) -> NSView {
+func makeProviderHeaderView(_ provider: Provider, model: CurrentModel?, title: String? = nil) -> NSView {
     let leading: CGFloat = 14   // icon sits in the menu's checkmark gutter, like NSMenuItem.image did
     let trailing: CGFloat = 14  // same right inset as the usage table
     let vPad: CGFloat = 3
@@ -967,7 +1377,7 @@ func makeProviderHeaderView(_ provider: Provider, model: CurrentModel?) -> NSVie
 
     let icon = NSImageView(image: provider.icon(pointSize: iconSize))
     icon.translatesAutoresizingMaskIntoConstraints = false
-    let name = label(provider.displayName)
+    let name = label(title ?? provider.displayName)
 
     let container = NSView()
     container.translatesAutoresizingMaskIntoConstraints = false
@@ -1344,23 +1754,23 @@ if CommandLine.arguments.contains("--selftest") {
     let fileURL = URL(fileURLWithPath: "/tmp/.credentials.json")
 
     // The reported bug: a months-old credentials file next to a keychain item refreshed today.
-    let staleFile = pickFreshest([(blob("dead", 1_000), .file(fileURL)), (blob("live", 9_000), .keychain)])
+    let staleFile = pickFreshest([(blob("dead", 1_000), .file(fileURL)), (blob("live", 9_000), .keychain(service: keychainService))])
     check(staleFile?.accessToken == "live", "pickFreshest: fresh keychain beats stale file")
     check(isKeychain(staleFile), "pickFreshest: source follows the winner (keychain)")
 
     // The mirror case must not regress: a live file next to a stale keychain item.
-    let staleKeychain = pickFreshest([(blob("live", 9_000), .file(fileURL)), (blob("dead", 1_000), .keychain)])
+    let staleKeychain = pickFreshest([(blob("live", 9_000), .file(fileURL)), (blob("dead", 1_000), .keychain(service: keychainService))])
     check(staleKeychain?.accessToken == "live", "pickFreshest: fresh file beats stale keychain")
     check(!isKeychain(staleKeychain), "pickFreshest: source follows the winner (file)")
 
     check(pickFreshest([(blob("only", 5_000), .file(fileURL))])?.accessToken == "only",
           "pickFreshest: single candidate")
-    check(pickFreshest([(blob("good", 5_000), .file(fileURL)), (Data("not json".utf8), .keychain)])?
+    check(pickFreshest([(blob("good", 5_000), .file(fileURL)), (Data("not json".utf8), .keychain(service: keychainService))])?
             .accessToken == "good",
           "pickFreshest: unparseable candidate is skipped")
-    check(isKeychain(pickFreshest([(blob("a", 7_000), .file(fileURL)), (blob("b", 7_000), .keychain)])),
+    check(isKeychain(pickFreshest([(blob("a", 7_000), .file(fileURL)), (blob("b", 7_000), .keychain(service: keychainService))])),
           "pickFreshest: equal expiry goes to the keychain (writeback follows Claude Code)")
-    check(isKeychain(pickFreshest([(blob("a", nil), .file(fileURL)), (blob("b", nil), .keychain)])),
+    check(isKeychain(pickFreshest([(blob("a", nil), .file(fileURL)), (blob("b", nil), .keychain(service: keychainService))])),
           "pickFreshest: no expiry anywhere goes to the keychain")
     check(pickFreshest([]) == nil, "pickFreshest: no candidates -> nil")
 
@@ -1886,6 +2296,93 @@ if CommandLine.arguments.contains("--selftest") {
     check(modelAfterClick(startingEnabled: true) == false,
           "a click from on leaves the switch off")
 
+    // --- Account display + profiles (ClaudeHome.swift / Account.swift) ---
+    check(keychainServiceName(ClaudeHome(configDir: "/Users/x/.claude", custom: false)) == "Claude Code-credentials",
+          "keychainServiceName: default home has no suffix")
+    // Vectors match Claude Code's own naming (and src/claudeHome.test.ts).
+    check(keychainServiceName(ClaudeHome(configDir: "/Users/test/.claude-work", custom: true))
+          == "Claude Code-credentials-03abf0ee", "keychainServiceName: custom home hash suffix")
+    check(keychainServiceName(ClaudeHome(configDir: "/Users/test/.claude-work/", custom: true))
+          == "Claude Code-credentials-8bd6f0f5", "keychainServiceName: trailing slash is a different item")
+    check(keychainServiceCandidates(ClaudeHome(configDir: "/Users/test/.claude-work", custom: true))
+          == ["Claude Code-credentials-03abf0ee", "Claude Code-credentials-8bd6f0f5"],
+          "keychainServiceCandidates: exact name first, trailing-slash variant second")
+    check(claudeHome(env: ["CLAUDE_CONFIG_DIR": ""]).custom == false, "claudeHome: empty env counts as unset")
+    check(claudeHome(env: ["CLAUDE_CONFIG_DIR": "/x/.claude-w"]) == ClaudeHome(configDir: "/x/.claude-w", custom: true),
+          "claudeHome: env value used verbatim")
+    check(ClaudeHome(configDir: "/x/.claude-w", custom: true).globalConfigCandidates.map(\.path)
+          == ["/x/.claude-w/.config.json", "/x/.claude-w/.claude.json"],
+          "globalConfigCandidates: legacy .config.json first, then the profile's .claude.json")
+
+    let cfg = Data(#"{"numStartups":3,"oauthAccount":{"emailAddress":"a@example.com","organizationName":"Acme","organizationType":"claude_team","accountUuid":"acc-1","organizationUuid":"org-1"}}"#.utf8)
+    let info = parseAccountInfo(cfg)
+    check(info?.email == "a@example.com" && info?.orgName == "Acme" && info?.identity == "acc-1|org-1",
+          "parseAccountInfo: reads oauthAccount")
+    check(parseAccountInfo(Data(#"{"numStartups":1}"#.utf8)) == nil, "parseAccountInfo: logged out → nil")
+    check(parseAccountInfo(Data("{not json".utf8)) == nil, "parseAccountInfo: malformed → nil")
+
+    let plans: [(String?, String?, String?)] = [
+        ("max", "default_claude_max_5x", "Max 5x"), ("max", "default_claude_max_20x", "Max 20x"),
+        ("max", nil, "Max"), ("pro", "default_claude_pro", "Pro"),
+        ("team", "default_claude_max_5x", "Team (Max 5x)"), ("enterprise", nil, "Enterprise"),
+        ("free", nil, "Free"), (nil, "default_claude_max_20x", "Max 20x"), (nil, nil, nil),
+    ]
+    for (sub, tier, want) in plans {
+        check(planLabel(subscriptionType: sub, rateLimitTier: tier) == want,
+              "planLabel(\(sub ?? "nil"), \(tier ?? "nil")) == \(want ?? "nil")")
+    }
+    check(accountLine(info, plan: "Team (Max 5x)") == "a@example.com · Team (Max 5x) · Acme",
+          "accountLine: team org name shown")
+    check(accountLine(AccountInfo(email: "a@example.com", orgName: "a's Organization", orgType: "claude_max"),
+                      plan: "Max 20x") == "a@example.com · Max 20x", "accountLine: personal org name hidden")
+    check(accountLine(nil, plan: "Pro") == "Pro" && accountLine(nil, plan: nil) == nil,
+          "accountLine: plan only / nothing")
+
+    let planBlob = Data(#"{"claudeAiOauth":{"accessToken":"t","expiresAt":5,"subscriptionType":"team","rateLimitTier":"default_claude_max_5x"}}"#.utf8)
+    let planCreds = pickFreshest([(planBlob, .keychain(service: keychainService))])
+    check(planCreds?.subscriptionType == "team" && planCreds?.rateLimitTier == "default_claude_max_5x",
+          "pickFreshest: winner carries subscriptionType / rateLimitTier")
+    if case .keychain(let service)? = planCreds?.source {
+        check(service == keychainService, "pickFreshest: keychain source keeps its service name")
+    } else {
+        check(false, "pickFreshest: keychain source keeps its service name")
+    }
+
+    check(profileSlug("My Work!") == "my-work" && profileSlug("  ") == "" && profileSlug("Personal 2") == "personal-2",
+          "profileSlug: lowercase, dashes, trimmed")
+    check(isValidProfileID("work") && !isValidProfileID("default") && !isValidProfileID("Work")
+          && !isValidProfileID(""), "isValidProfileID")
+    check(shellQuote("/Users/o'neil/.claude-w") == #"'/Users/o'\''neil/.claude-w'"#, "shellQuote: embedded quote")
+    let work = ClaudeProfile(id: "work", label: "Work", home: ClaudeHome(configDir: "/Users/x/.claude-work", custom: true))
+    check(claudeCommand(for: work) == "CLAUDE_CONFIG_DIR='/Users/x/.claude-work' claude", "claudeCommand: custom home")
+    check(claudeCommand(for: .makeDefault(home: ClaudeHome(configDir: "/Users/x/.claude", custom: false))) == "claude",
+          "claudeCommand: default home is plain claude")
+    check(shellAlias(for: work) == #"alias claude-work="CLAUDE_CONFIG_DIR='/Users/x/.claude-work' claude""#,
+          "shellAlias")
+    check(work.ledgerProvider == "claude-work" && ClaudeProfile.makeDefault().ledgerProvider == "claude",
+          "ledgerProvider: default keeps the shared 'claude' key")
+    check(work.wakeupKey == "claude.work" && ClaudeProfile.makeDefault().wakeupKey == "claude",
+          "wakeupKey: default keeps the pre-profile key")
+    check(appleScriptEscaped(#"a "b" \c"#) == #"a \"b\" \\c"#, "appleScriptEscaped")
+
+    let roundTrip = try? parseProfiles(serializeProfiles([.makeDefault(), work]))
+    check(roundTrip == [work], "accounts.json round trip drops the default and keeps the rest")
+    check((try? parseProfiles(Data(#"{"version":2,"profiles":[]}"#.utf8))) == nil,
+          "parseProfiles: unknown version is refused (never overwritten)")
+    let dupes = try? parseProfiles(Data(#"{"version":1,"profiles":[{"id":"w","label":"W","configDir":"/a"},{"id":"w","label":"W2","configDir":"/b"},{"id":"default","label":"D","configDir":"/c"},{"id":"Bad!","label":"B","configDir":"/d"}]}"#.utf8))
+    check(dupes?.map(\.id) == ["w"], "parseProfiles: duplicate / reserved / invalid ids skipped")
+
+    let scratch = FileManager.default.temporaryDirectory.appendingPathComponent("pulse-selftest-\(getpid())")
+    try? FileManager.default.removeItem(at: scratch)
+    check((try? loadExtraProfiles(home: scratch)) == [], "loadExtraProfiles: missing file → empty")
+    check((try? saveExtraProfiles([work], home: scratch)) != nil
+          && (try? loadExtraProfiles(home: scratch)) == [work], "saveExtraProfiles then load")
+    try? Data("garbage".utf8).write(to: accountsFileURL(home: scratch))
+    check((try? saveExtraProfiles([], home: scratch)) == nil
+          && (try? Data(contentsOf: accountsFileURL(home: scratch))) == Data("garbage".utf8),
+          "saveExtraProfiles: refuses to overwrite an unparseable accounts.json")
+    try? FileManager.default.removeItem(at: scratch)
+
     print(failures == 0 ? "ALL PASS" : "\(failures) FAILURE(S)")
     exit(failures == 0 ? 0 : 1)
 }
@@ -1894,20 +2391,33 @@ if CommandLine.arguments.contains("--selftest") {
 if CommandLine.arguments.contains("--once") {
     let sema = DispatchSemaphore(value: 0)
     Task {
+        var profiles = [ClaudeProfile.makeDefault()]
         do {
-            let usage = try await fetchUsageAutoRefreshing()
-            let model = readCurrentModel()
-            let tokens = readTokenStats()
-            print("[gauge] " + menuBarText(usage))
-            print("  5h:     \(pct(usage.fiveHour.utilization))% · \(formatResetIn(usage.fiveHour.resetsAt))")
-            print("  Weekly: \(pct(usage.sevenDay.utilization))% · \(formatResetIn(usage.sevenDay.resetsAt))")
-            for scoped in usage.weeklyScoped {
-                print("  Weekly \(scoped.model): \(pct(scoped.window.utilization))% · \(formatResetIn(scoped.window.resetsAt))")
-            }
-            if let model = model { print("  Model:  \(model.name) (\(model.id))") }
-            if let tokens { for row in tokenRows(tokens) { print("  \(row.label): \(row.value)") } }
+            profiles += try loadExtraProfiles()
         } catch {
-            print("Error: \(error.localizedDescription)")
+            print("accounts.json: \(error.localizedDescription)")
+        }
+        for profile in profiles {
+            if profiles.count > 1 { print("[\(profile.label)] \(profile.home.configDir)") }
+            do {
+                let (usage, creds) = try await fetchUsageAutoRefreshing(home: profile.home)
+                let model = readCurrentModel(root: profile.home.projectsURL)
+                let tokens = readTokenStats(profile: profile)
+                let plan = planLabel(subscriptionType: creds.subscriptionType, rateLimitTier: creds.rateLimitTier)
+                print("[gauge] " + menuBarText(usage))
+                if let account = accountLine(readAccountInfo(home: profile.home), plan: plan) {
+                    print("  Account: \(account)")
+                }
+                print("  5h:     \(pct(usage.fiveHour.utilization))% · \(formatResetIn(usage.fiveHour.resetsAt))")
+                print("  Weekly: \(pct(usage.sevenDay.utilization))% · \(formatResetIn(usage.sevenDay.resetsAt))")
+                for scoped in usage.weeklyScoped {
+                    print("  Weekly \(scoped.model): \(pct(scoped.window.utilization))% · \(formatResetIn(scoped.window.resetsAt))")
+                }
+                if let model = model { print("  Model:  \(model.name) (\(model.id))") }
+                if let tokens { for row in tokenRows(tokens) { print("  \(row.label): \(row.value)") } }
+            } catch {
+                print("Error: \(error.localizedDescription)")
+            }
         }
         sema.signal()
     }
@@ -2015,6 +2525,9 @@ if let idx = CommandLine.arguments.firstIndex(of: "--menu") {
         makeUsageTableView(rows: claudeRows, columnWidths: widths, captionResetColumn: true),
         makeProviderHeaderView(.codex, model: CurrentModel(id: "gpt-5.6-terra", name: "GPT-5.6-Terra")),
         makeUsageTableView(rows: codexRows, columnWidths: widths),
+        // A second Claude account profile's header ("Claude · <label>"), as shown with several.
+        makeProviderHeaderView(.claude, model: CurrentModel(id: "claude-opus-5-5", name: "Opus 5.5"),
+                               title: "Claude · Personal"),
         // The Auto Wakeup row: its switch must sit at the same right edge as the tables' reset
         // column once every view is stretched to the menu width.
         makeAutoWakeupView(

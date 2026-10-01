@@ -12,13 +12,9 @@ type currentModel struct {
 	Name string
 }
 
-// readCurrentModel: the last model from the most recent transcript under ~/.claude/projects.
+// readCurrentModel: the last model from the most recent transcript under <configDir>/projects.
 func readCurrentModel() (*currentModel, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return nil, err
-	}
-	root := filepath.Join(home, ".claude", "projects")
+	root := claudeHome().projectsDir()
 	dirs, err := os.ReadDir(root)
 	if err != nil {
 		return nil, err

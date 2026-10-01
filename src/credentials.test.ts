@@ -5,6 +5,7 @@ import {
   CredentialsError,
   parseCredentials,
   pickFreshestToken,
+  pickFreshest,
 } from "./credentials";
 
 /** A credentials blob in Claude Code's on-disk shape. */
@@ -71,4 +72,23 @@ test("pickFreshestToken: nothing usable -> null", () => {
   assert.equal(pickFreshestToken([]), null);
   assert.equal(pickFreshestToken([null, null]), null);
   assert.equal(pickFreshestToken(["not json"]), null);
+});
+
+test("parseCredentials: carries subscriptionType and rateLimitTier", () => {
+  const raw = JSON.stringify({
+    claudeAiOauth: { accessToken: "t", expiresAt: 5, subscriptionType: "team", rateLimitTier: "default_claude_max_5x" },
+  });
+  assert.deepEqual(parseCredentials(raw), {
+    accessToken: "t",
+    expiresAt: 5,
+    subscriptionType: "team",
+    rateLimitTier: "default_claude_max_5x",
+  });
+});
+
+test("pickFreshest: returns the whole winning record", () => {
+  const older = JSON.stringify({ claudeAiOauth: { accessToken: "old", expiresAt: 1, subscriptionType: "pro" } });
+  const newer = JSON.stringify({ claudeAiOauth: { accessToken: "new", expiresAt: 2, subscriptionType: "max" } });
+  assert.equal(pickFreshest([newer, older])?.subscriptionType, "max");
+  assert.equal(pickFreshest([null, "garbage"]), null);
 });

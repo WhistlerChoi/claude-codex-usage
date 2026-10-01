@@ -45,10 +45,9 @@ func extractLastModel(_ content: String) -> String? {
     return nil
 }
 
-/// Read the model from the most recently modified transcript under ~/.claude/projects.
-func readCurrentModel() -> CurrentModel? {
+/// Read the model from the most recently modified transcript under <configDir>/projects.
+func readCurrentModel(root: URL = claudeHome().projectsURL) -> CurrentModel? {
     let fm = FileManager.default
-    let root = fm.homeDirectoryForCurrentUser.appendingPathComponent(".claude/projects")
     guard let dirs = try? fm.contentsOfDirectory(
         at: root, includingPropertiesForKeys: [.isDirectoryKey], options: []
     ) else {

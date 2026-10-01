@@ -62,3 +62,15 @@ func TestPickFreshestToken(t *testing.T) {
 		t.Errorf("no candidates should yield empty: got %q", got)
 	}
 }
+
+func TestPickFreshestCarriesPlan(t *testing.T) {
+	older := []byte(`{"claudeAiOauth":{"accessToken":"old","expiresAt":1,"subscriptionType":"pro"}}`)
+	newer := []byte(`{"claudeAiOauth":{"accessToken":"new","expiresAt":2,"subscriptionType":"team","rateLimitTier":"default_claude_max_5x"}}`)
+	got := pickFreshest([][]byte{newer, older})
+	if got == nil || got.Token != "new" || got.SubscriptionType != "team" || got.RateLimitTier != "default_claude_max_5x" {
+		t.Errorf("got %+v", got)
+	}
+	if got := pickFreshest([][]byte{[]byte("garbage")}); got != nil {
+		t.Errorf("garbage: got %+v", got)
+	}
+}

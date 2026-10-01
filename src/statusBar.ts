@@ -9,6 +9,18 @@ export interface Thresholds {
   alert: number;
 }
 
+/** Everything one usage render needs besides the usage itself. */
+export interface UsageView {
+  lastUpdated: Date;
+  thresholds: Thresholds;
+  stale?: boolean;
+  model?: CurrentModel | null;
+  tokens?: TokenStats | null;
+  showTokenHistory?: boolean;
+  /** accountLine() — "email · plan · org" */
+  account?: string | null;
+}
+
 export class UsageStatusBar {
   private readonly item: vscode.StatusBarItem;
 
@@ -24,18 +36,11 @@ export class UsageStatusBar {
     this.item.text = "$(sync~spin) Pulse";
   }
 
-  showUsage(
-    usage: UsageData,
-    lastUpdated: Date,
-    thresholds: Thresholds,
-    stale = false,
-    model?: CurrentModel | null,
-    tokens?: TokenStats | null,
-    showTokenHistory = false
-  ): void {
+  showUsage(usage: UsageData, view: UsageView): void {
+    const { lastUpdated, thresholds, stale = false, model, tokens, showTokenHistory = false, account } = view;
     this.item.text = statusBarText(usage, model?.name) + (stale ? " $(warning)" : "");
     const md = new vscode.MarkdownString(
-      tooltipMarkdown(usage, lastUpdated, new Date(), model, tokens, showTokenHistory) +
+      tooltipMarkdown(usage, lastUpdated, new Date(), model, tokens, showTokenHistory, account) +
         (stale ? "\n\n⚠ Last refresh failed — showing previous value" : "")
     );
     // Trust only the token-history toggle link; every other command link stays inert.
