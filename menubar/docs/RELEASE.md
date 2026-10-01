@@ -40,14 +40,9 @@ troubleshooting.
       xcrun stapler staple Pulse.app
       spctl --assess --type execute Pulse.app          # expect "accepted, source=Notarized Developer ID"
       ```
-- [ ] **Verify the entitlement is present** (needed so the "Log In via Claude Code"
-      menu item can drive Terminal under the hardened runtime):
-      ```bash
-      codesign -dv --entitlements - Pulse.app | grep apple-events
-      ```
 - [ ] **Smoke-test the signed app on a clean machine** (or a second account): launch,
-      confirm the menu bar shows usage, and that "Log In via Claude Code" prompts for
-      Automation permission instead of failing silently.
+      confirm the menu bar shows usage, and that "Log In via Claude Code" opens Terminal
+      and actually starts `claude` (no Automation prompt — it opens a `.command` file).
 - [ ] **Bump the version** in `build-app.sh` (`CFBundleVersion` /
       `CFBundleShortVersionString`) for each release.
 - [ ] **Confirm no secrets** are bundled: `Pulse.app` ships only the binary, the header
@@ -73,7 +68,7 @@ gaps for *commercial distribution*; all code fixes have been applied.
 | # | Issue | Fix |
 |---|-------|-----|
 | 1 | No code signing / notarization → Gatekeeper blocks distribution | `build-app.sh` signs with hardened runtime + entitlements when `CODESIGN_IDENTITY` is set; ad-hoc otherwise. `Pulse.entitlements` added. |
-| 2 | AppleScript (Terminal automation) entitlement undeclared → login menu silently breaks once signed | `Pulse.entitlements` grants `com.apple.security.automation.apple-events`; `Info.plist` adds `NSAppleEventsUsageDescription`; `login()` now shows an `NSAlert` on failure. |
+| 2 | AppleScript (Terminal automation) entitlement undeclared → login menu silently breaks once signed | `Pulse.entitlements` grants `com.apple.security.automation.apple-events`; `Info.plist` adds `NSAppleEventsUsageDescription`; `login()` now shows an `NSAlert` on failure. **Superseded (2026-10):** `do script` typed the command before the new shell finished its startup files, so a slow `.zshrc` swallowed it (echoed, never run). Terminal now opens a self-deleting `.command` file that runs the command in `$SHELL -i -l -c`; the entitlement and usage string were removed. |
 | 3 | No user-facing disclosure of sensitive-data access | "Security & privacy" section added to `README.md`. |
 | 4 | Keychain read via `/usr/bin/security` subprocess | ~~Replaced with Security.framework `SecItemCopyMatching`~~ **Reverted (2026-07).** Native `SecItem*` writes re-stamp Claude Code's item with Pulse's partition list instead of `apple-tool:`, locking Claude Code out of its own credentials (endless keychain password prompts at every `claude` start). Both read and write now shell out to `/usr/bin/security` **by absolute path** (retaining the PATH-hijack resistance this fix targeted), mirroring Claude Code's own access pattern: `add-generic-password -U … -X <hex>` piped to `security -i` stdin so the secret never appears in argv (argv fallback only for >4032-byte lines, matching Claude Code). Writeback is update-only and self-heals a corrupted partition via delete+re-add. See the keychain CRITICAL section in the root `CLAUDE.md`. |
 | 5 | Debug render paths used shared `/tmp` (symlink-following risk) | Switched to `NSTemporaryDirectory()`. |

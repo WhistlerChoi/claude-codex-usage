@@ -2,8 +2,6 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <!-- "Log In via Claude Code" drives Terminal via AppleScript; required under hardened runtime. -->
-  <key>com.apple.security.automation.apple-events</key>
-  <true/>
+  <!-- No entitlements needed: Terminal is opened with a .command file, not driven by AppleScript. -->
 </dict>
 </plist>
