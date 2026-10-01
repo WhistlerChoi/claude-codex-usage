@@ -391,31 +391,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         openTerminal(command: "codex login")
     }
 
+    /// Run `command` in a new Terminal window. It is handed over as a `.command` file rather than
+    /// typed in (AppleScript `do script`): typed text arrives before the new shell has finished
+    /// its startup files, and a slow or input-reading `.zshrc` swallows it — the line is echoed
+    /// but never runs. Opening a file also needs no Automation permission.
     private func openTerminal(command: String) {
-        let script = """
-        tell application "Terminal"
-            activate
-            do script "\(appleScriptEscaped(command))"
-        end tell
-        """
-        var err: NSDictionary?
-        if let s = NSAppleScript(source: script) {
-            s.executeAndReturnError(&err)
-        }
-        if let err = err {
-            let detail = err[NSAppleScript.errorMessage] as? String ?? "Unknown AppleScript error."
+        let fail = { (detail: String) in
             let alert = NSAlert()
             alert.alertStyle = .warning
             alert.messageText = "Could not open Terminal"
             alert.informativeText = """
-                Pulse needs permission to control Terminal. \
-                Allow it in System Settings > Privacy & Security > Automation, \
-                or run "\(command)" in a terminal yourself.
+                Run "\(command)" in a terminal yourself.
 
                 (\(detail))
                 """
             NSApp.activate(ignoringOtherApps: true)
             alert.runModal()
+        }
+        guard let terminal = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.Terminal")
+        else { return fail("Terminal.app was not found.") }
+        let file = FileManager.default.temporaryDirectory
+            .appendingPathComponent("pulse-\(UUID().uuidString).command")
+        do {
+            try terminalScript(command: command).write(to: file, atomically: true, encoding: .utf8)
+            try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: file.path)
+        } catch {
+            return fail(error.localizedDescription)
+        }
+        NSWorkspace.shared.open([file], withApplicationAt: terminal, configuration: .init()) { _, error in
+            guard let error else { return }
+            try? FileManager.default.removeItem(at: file)
+            DispatchQueue.main.async { fail(error.localizedDescription) }
         }
     }
 
@@ -1206,9 +1212,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
-/// Escape a string for use inside an AppleScript double-quoted literal. Pure.
-func appleScriptEscaped(_ s: String) -> String {
-    s.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"")
+/// The `.command` file `openTerminal` hands to Terminal. It deletes itself, then runs `command` in
+/// the user's interactive login shell — so `.zshrc` (and the PATH it sets up, e.g. `~/.local/bin`)
+/// is fully loaded first — and stays in that shell afterwards. Pure.
+func terminalScript(command: String) -> String {
+    let shell = #""${SHELL:-/bin/zsh}""#
+    return """
+        #!/bin/sh
+        rm -f "$0"
+        cd "$HOME" || exit 1
+        exec \(shell) -i -l -c \(shellQuote("\(command); exec \(shell) -i -l"))
+
+        """
 }
 
 /// De-emphasized note row under a provider's usage table: "Tokens today: 1.2M in · 48K out ·
@@ -2437,7 +2452,9 @@ if CommandLine.arguments.contains("--selftest") {
           "ledgerProvider: default keeps the shared 'claude' key")
     check(work.wakeupKey == "claude.work" && ClaudeProfile.makeDefault().wakeupKey == "claude",
           "wakeupKey: default keeps the pre-profile key")
-    check(appleScriptEscaped(#"a "b" \c"#) == #"a \"b\" \\c"#, "appleScriptEscaped")
+    check(terminalScript(command: "CLAUDE_CONFIG_DIR='/a b/.claude-w' claude").contains(
+              #"exec "${SHELL:-/bin/zsh}" -i -l -c 'CLAUDE_CONFIG_DIR='\''/a b/.claude-w'\'' claude; exec "${SHELL:-/bin/zsh}" -i -l'"#),
+          "terminalScript: command runs in an interactive login shell, quotes preserved")
 
     let roundTrip = try? parseProfiles(serializeProfiles([.makeDefault(), work]))
     check(roundTrip == [work], "accounts.json round trip drops the default and keeps the rest")

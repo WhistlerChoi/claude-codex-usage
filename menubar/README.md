@@ -92,9 +92,9 @@ xcrun stapler staple Pulse.app
 spctl --assess --type execute Pulse.app
 ```
 
-`Pulse.entitlements` grants `com.apple.security.automation.apple-events`, which the
-"Log In via Claude Code" menu item needs to open Terminal under the hardened runtime
-(macOS will still ask the user for Automation permission on first use).
+"Log In via Claude Code" (and Open Claude Code / Log In via Codex) opens Terminal with a
+temporary, self-deleting `.command` file that runs the command in your interactive login shell,
+so no Automation permission or Apple Events entitlement is needed.
 
 ## Security & privacy
 

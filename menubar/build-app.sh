@@ -45,8 +45,6 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>LSMinimumSystemVersion</key><string>13.0</string>
   <key>LSUIElement</key><true/>
-  <key>NSAppleEventsUsageDescription</key>
-  <string>Pulse opens Terminal and runs the "claude" command so you can log in to Claude Code.</string>
   <key>NSHumanReadableCopyright</key><string>© 2026 AGLE</string>
 </dict>
 </plist>
