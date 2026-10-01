@@ -92,11 +92,7 @@ func parseWeeklyScoped(raw json.RawMessage) []scopedWindow {
 	return out
 }
 
-func fetchUsage() (*usageResp, error) {
-	token, err := readAccessToken()
-	if err != nil {
-		return nil, err
-	}
+func fetchUsage(token string) (*usageResp, error) {
 	req, _ := http.NewRequest("GET", "https://api.anthropic.com/api/oauth/usage", nil)
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("anthropic-beta", "oauth-2025-04-20")

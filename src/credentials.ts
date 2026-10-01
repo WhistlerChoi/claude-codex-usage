@@ -1,12 +1,9 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { readFile } from "node:fs/promises";
-import { homedir } from "node:os";
-import { join } from "node:path";
+import { claudeHome, credentialsFilePath, keychainServiceName, type ClaudeHome } from "./claudeHome";
 
 const execFileAsync = promisify(execFile);
-
-const KEYCHAIN_SERVICE = "Claude Code-credentials";
 
 export class CredentialsError extends Error {}
 
@@ -30,6 +27,10 @@ export interface ParsedCredentials {
   accessToken: string;
   /** ms epoch, absent in older/hand-written credential blobs */
   expiresAt?: number;
+  /** "pro" | "max" | "team" | "enterprise" — absent in older blobs */
+  subscriptionType?: string;
+  /** e.g. "default_claude_max_5x" */
+  rateLimitTier?: string;
 }
 
 /**
@@ -49,14 +50,20 @@ export function parseCredentials(raw: string): ParsedCredentials | null {
     return null;
   }
   const expiresAt = oauth?.expiresAt;
-  return {
+  const out: ParsedCredentials = {
     accessToken: token,
     expiresAt: typeof expiresAt === "number" ? expiresAt : undefined,
   };
+  // Only present keys, so callers comparing records see no `undefined` fields.
+  for (const key of ["subscriptionType", "rateLimitTier"] as const) {
+    const v = oauth?.[key];
+    if (typeof v === "string" && v.length > 0) out[key] = v;
+  }
+  return out;
 }
 
 /**
- * Pick the live token out of every store that has one ("freshest wins").
+ * Pick the live credentials out of every store that has one ("freshest wins").
  *
  * Both stores must be consulted because Claude Code moved to the keychain on macOS and can leave a
  * long-dead ~/.claude/.credentials.json behind: preferring the file unconditionally means every
@@ -64,7 +71,7 @@ export function parseCredentials(raw: string): ParsedCredentials | null {
  * rejecting cleanly. Candidates are ranked by `expiresAt`; ties go to the LAST candidate, so
  * callers pass the keychain last. Pure (no I/O) so it is testable.
  */
-export function pickFreshestToken(candidates: Array<string | null>): string | null {
+export function pickFreshest(candidates: Array<string | null>): ParsedCredentials | null {
   let best: ParsedCredentials | null = null;
   let bestRank = -Infinity;
   for (const raw of candidates) {
@@ -77,21 +84,25 @@ export function pickFreshestToken(candidates: Array<string | null>): string | nu
       bestRank = rank;
     }
   }
-  return best?.accessToken ?? null;
+  return best;
+}
+
+/** pickFreshest, reduced to the token. */
+export function pickFreshestToken(candidates: Array<string | null>): string | null {
+  return pickFreshest(candidates)?.accessToken ?? null;
 }
 
 /** Read credentials from the common file path (Windows/Linux/macOS). Returns null if absent. */
-async function readFromFile(): Promise<string | null> {
-  const path = join(homedir(), ".claude", ".credentials.json");
+async function readFromFile(home: ClaudeHome): Promise<string | null> {
   try {
-    return await readFile(path, "utf8");
+    return await readFile(credentialsFilePath(home), "utf8");
   } catch {
     return null;
   }
 }
 
 /** Read credentials from the macOS keychain. Returns null if absent. */
-async function readFromKeychain(): Promise<string | null> {
+async function readFromKeychain(home: ClaudeHome): Promise<string | null> {
   if (process.platform !== "darwin") {
     return null;
   }
@@ -99,7 +110,7 @@ async function readFromKeychain(): Promise<string | null> {
     const { stdout } = await execFileAsync("security", [
       "find-generic-password",
       "-s",
-      KEYCHAIN_SERVICE,
+      keychainServiceName(home),
       "-w",
     ]);
     return stdout;
@@ -109,20 +120,20 @@ async function readFromKeychain(): Promise<string | null> {
 }
 
 /**
- * Read Claude Code's OAuth accessToken.
- * Reads ~/.claude/.credentials.json and (on macOS) the keychain, then uses whichever token is
- * fresher — see pickFreshestToken for why the file cannot simply win.
+ * Read Claude Code's OAuth credentials.
+ * Reads <configDir>/.credentials.json and (on macOS) the keychain, then uses whichever token is
+ * fresher — see pickFreshest for why the file cannot simply win.
  * Claude Code refreshes the token periodically, so re-reading every poll handles expiry automatically.
  */
-export async function readAccessToken(): Promise<string> {
+export async function readCredentials(home: ClaudeHome = claudeHome()): Promise<ParsedCredentials> {
   // Keychain last: it wins ties, matching where Claude Code stores credentials on macOS.
   const [fileRaw, keychainRaw] = await Promise.all([
-    readFromFile(),
-    readFromKeychain(),
+    readFromFile(home),
+    readFromKeychain(home),
   ]);
-  const token = pickFreshestToken([fileRaw, keychainRaw]);
-  if (token) {
-    return token;
+  const creds = pickFreshest([fileRaw, keychainRaw]);
+  if (creds) {
+    return creds;
   }
   if (fileRaw != null || keychainRaw != null) {
     // A store exists but holds no usable token (truncated/hand-edited blob).
@@ -132,4 +143,9 @@ export async function readAccessToken(): Promise<string> {
   throw new CredentialsError(
     "Could not read credentials. Log in with Claude Code."
   );
+}
+
+/** Read Claude Code's OAuth accessToken (see readCredentials). */
+export async function readAccessToken(home: ClaudeHome = claudeHome()): Promise<string> {
+  return (await readCredentials(home)).accessToken;
 }

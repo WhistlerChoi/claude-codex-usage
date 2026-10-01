@@ -6,7 +6,8 @@ import Foundation
 // Code's own `security find-generic-password` hits a keychain password prompt on every start
 // (an endless, un-dismissable popup loop for the user). See CLAUDE.md.
 
-/// The keychain service name Claude Code stores its OAuth credentials under.
+/// The keychain service name Claude Code stores the default home's OAuth credentials under
+/// (a CLAUDE_CONFIG_DIR home adds a hash suffix — see `keychainServiceName`).
 let keychainService = "Claude Code-credentials"
 /// Absolute path so a PATH-planted binary can never intercept the token.
 let securityToolPath = "/usr/bin/security"
@@ -27,7 +28,7 @@ enum CredentialsError: Error, LocalizedError {
 /// Where the credentials were read from, so a refreshed token is written back to the same place.
 enum CredentialSource {
     case file(URL)
-    case keychain
+    case keychain(service: String)
 }
 
 /// The OAuth credentials Claude Code stores, plus where they came from.
@@ -36,6 +37,10 @@ struct Credentials {
     var refreshToken: String?
     var expiresAtMs: Double?
     let source: CredentialSource
+    /// "pro" | "max" | "team" | "enterprise" — absent in older blobs
+    var subscriptionType: String? = nil
+    /// e.g. "default_claude_max_5x"
+    var rateLimitTier: String? = nil
 }
 
 /// Extract accessToken from credentials JSON Data. { claudeAiOauth: { accessToken } } or { accessToken }.
@@ -67,9 +72,13 @@ func parseCredentials(_ data: Data, source: CredentialSource) -> Credentials? {
           let tok = oauth["accessToken"] as? String, !tok.isEmpty else {
         return nil
     }
-    let refresh = (oauth["refreshToken"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+    func str(_ key: String) -> String? {
+        (oauth[key] as? String).flatMap { $0.isEmpty ? nil : $0 }
+    }
     let expires = (oauth["expiresAt"] as? NSNumber)?.doubleValue
-    return Credentials(accessToken: tok, refreshToken: refresh, expiresAtMs: expires, source: source)
+    return Credentials(
+        accessToken: tok, refreshToken: str("refreshToken"), expiresAtMs: expires, source: source,
+        subscriptionType: str("subscriptionType"), rateLimitTier: str("rateLimitTier"))
 }
 
 // MARK: - security CLI plumbing (pure helpers are selftest-covered in main.swift)
@@ -177,17 +186,13 @@ private func runSecurityCLI(
 /// Read the credentials string from the macOS keychain via the `security` CLI.
 /// Returns nil if absent or unreadable. Promptless in the healthy state: the item is created by
 /// `security` (Claude Code), so `apple-tool:` partition members read it without authorization.
-private func readFromKeychain() -> Data? {
+private func readFromKeychain(service: String) -> Data? {
     guard let r = runSecurityCLI(
-        ["find-generic-password", "-s", keychainService, "-w"], timeout: 5),
+        ["find-generic-password", "-s", service, "-w"], timeout: 5),
         r.status == 0,
         let s = String(data: r.stdout, encoding: .utf8) else { return nil }
     let trimmed = s.trimmingCharacters(in: .whitespacesAndNewlines)
     return trimmed.isEmpty ? nil : Data(trimmed.utf8)
-}
-
-private func credentialsFileURL() -> URL {
-    FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".claude/.credentials.json")
 }
 
 /// Pick the live credentials out of every store that has some ("freshest wins").
@@ -215,16 +220,19 @@ func pickFreshest(_ candidates: [(Data, CredentialSource)]) -> Credentials? {
 }
 
 /// Read the Claude Code OAuth credentials (token, refresh token, expiry) and record their source.
-/// Reads ~/.claude/.credentials.json and (on macOS) the keychain, then uses whichever is fresher.
-func readCredentials() throws -> Credentials {
-    let credPath = credentialsFileURL()
+/// Reads `<configDir>/.credentials.json` and the home's keychain item, then uses whichever is fresher.
+func readCredentials(home: ClaudeHome = claudeHome()) throws -> Credentials {
+    let credPath = home.credentialsURL
     var candidates: [(Data, CredentialSource)] = []
     if let data = try? Data(contentsOf: credPath) {
         candidates.append((data, .file(credPath)))
     }
     // Keychain last: it wins ties, so writeback lands where Claude Code reads.
-    if let data = readFromKeychain() {
-        candidates.append((data, .keychain))
+    for service in keychainServiceCandidates(home) {
+        if let data = readFromKeychain(service: service) {
+            candidates.append((data, .keychain(service: service)))
+            break
+        }
     }
     if let c = pickFreshest(candidates) {
         return c
@@ -233,8 +241,8 @@ func readCredentials() throws -> Credentials {
 }
 
 /// Read just the OAuth accessToken (back-compat helper).
-func readAccessToken() throws -> String {
-    try readCredentials().accessToken
+func readAccessToken(home: ClaudeHome = claudeHome()) throws -> String {
+    try readCredentials(home: home).accessToken
 }
 
 // MARK: - Writeback (persist a refreshed token to the same store it came from)
@@ -276,9 +284,10 @@ func writeCredentials(
     case .file(let url):
         try writeCredentialsToFile(
             accessToken: accessToken, refreshToken: refreshToken, expiresAtMs: expiresAtMs, url: url)
-    case .keychain:
+    case .keychain(let service):
         try writeCredentialsToKeychain(
-            accessToken: accessToken, refreshToken: refreshToken, expiresAtMs: expiresAtMs)
+            accessToken: accessToken, refreshToken: refreshToken, expiresAtMs: expiresAtMs,
+            service: service)
     }
 }
 
@@ -304,10 +313,10 @@ private func writeCredentialsToFile(
 /// One add-generic-password invocation. The secret travels hex-encoded over `security -i` stdin
 /// so it never appears in argv; oversized lines fall back to argv, exactly like Claude Code.
 private func runAddGenericPassword(
-    account: String, hexPayload: String, update: Bool
+    account: String, service: String, hexPayload: String, update: Bool
 ) -> SecurityCLIResult? {
     let line = addGenericPasswordCommandLine(
-        account: account, service: keychainService, hexPayload: hexPayload, update: update)
+        account: account, service: service, hexPayload: hexPayload, update: update)
     if line.utf8.count <= securityStdinLimit {
         return runSecurityCLI(["-i"], stdinLine: line, timeout: 10)
     }
@@ -315,18 +324,18 @@ private func runAddGenericPassword(
         Data("Pulse: credentials exceed the security -i line budget; falling back to argv\n".utf8))
     var args = ["add-generic-password"]
     if update { args.append("-U") }
-    args += ["-a", account, "-s", keychainService, "-X", hexPayload]
+    args += ["-a", account, "-s", service, "-X", hexPayload]
     return runSecurityCLI(args, timeout: 10)
 }
 
 private func writeCredentialsToKeychain(
-    accessToken: String, refreshToken: String, expiresAtMs: Double
+    accessToken: String, refreshToken: String, expiresAtMs: Double, service: String
 ) throws {
     // Update-only: an absent item means Claude Code logged out. Recreating it here would
     // resurrect stale credentials mid-login (and stamp the wrong partition list) — the very bug
     // this path exists to avoid. The in-memory RefreshedCredentialsCache keeps us running.
     guard let probe = runSecurityCLI(
-        ["find-generic-password", "-s", keychainService], timeout: 5),
+        ["find-generic-password", "-s", service], timeout: 5),
         probe.status == 0 else {
         throw CredentialsError.writeFailed(
             "Keychain item not found; skipping writeback — Claude Code owns the item lifecycle.")
@@ -335,12 +344,12 @@ private func writeCredentialsToKeychain(
     let account = parseKeychainAccount(
         fromFindOutput: String(data: probe.stdout, encoding: .utf8) ?? "") ?? NSUserName()
 
-    let existing = readFromKeychain()
+    let existing = readFromKeychain(service: service)
     let data = try mergedCredentialsData(
         existing: existing, accessToken: accessToken, refreshToken: refreshToken, expiresAtMs: expiresAtMs)
     let hex = hexEncode(data)
 
-    let first = runAddGenericPassword(account: account, hexPayload: hex, update: true)
+    let first = runAddGenericPassword(account: account, service: service, hexPayload: hex, update: true)
     if let first = first, first.status == 0 { return }
 
     // Self-heal: `-U` is denied when some app once rewrote the item with a native SecItem* call
@@ -348,8 +357,8 @@ private func writeCredentialsToKeychain(
     // by `security` itself, so the recreated item carries the `apple-tool:` partition Claude Code
     // expects — this repairs the endless-password-prompt state on the next writeback.
     _ = runSecurityCLI(
-        ["delete-generic-password", "-a", account, "-s", keychainService], timeout: 10)
-    let second = runAddGenericPassword(account: account, hexPayload: hex, update: false)
+        ["delete-generic-password", "-a", account, "-s", service], timeout: 10)
+    let second = runAddGenericPassword(account: account, service: service, hexPayload: hex, update: false)
     if let second = second, second.status == 0 { return }
 
     let detail: String

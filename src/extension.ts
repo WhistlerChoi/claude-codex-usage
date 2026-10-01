@@ -1,19 +1,20 @@
 import * as vscode from "vscode";
 import { fetchUsage, AuthError, TransientError, type UsageData } from "./usageClient";
-import { CredentialsError } from "./credentials";
+import { CredentialsError, readCredentials } from "./credentials";
 import { readCurrentModel, type CurrentModel } from "./model";
+import { readAccountInfo } from "./account";
+import { claudeHome, projectsDir } from "./claudeHome";
 import { extractDailyTotals } from "./tokens";
 import { updateTokenHistory, type TokenStats } from "./tokenHistory";
-import { homedir } from "node:os";
-import { join } from "node:path";
 import { UsageStatusBar, type Thresholds } from "./statusBar";
-import { nextRetryDelayMs, shouldShowStale } from "./format";
+import { accountLine, nextRetryDelayMs, planLabel, shouldShowStale } from "./format";
 
 let statusBar: UsageStatusBar;
 let timer: NodeJS.Timeout | undefined;
 let lastUsage: UsageData | undefined;
 let lastModel: CurrentModel | null = null;
 let lastTokens: TokenStats | null = null;
+let lastAccount: string | null = null;
 let lastUpdatedAt: Date | undefined;
 let lastStale = false;
 /** Whether the tooltip shows the 7d / 30d token rows (toggled from the tooltip link; not persisted). */
@@ -42,6 +43,22 @@ function scheduleNext(delayMs: number): void {
   timer = setTimeout(() => void refresh(), delayMs);
 }
 
+/** Render the cached state (no I/O). */
+function renderLast(thresholds: Thresholds, stale: boolean): void {
+  if (!lastUsage || !lastUpdatedAt) {
+    return;
+  }
+  statusBar.showUsage(lastUsage, {
+    lastUpdated: lastUpdatedAt,
+    thresholds,
+    stale,
+    model: lastModel,
+    tokens: lastTokens,
+    showTokenHistory,
+    account: lastAccount,
+  });
+}
+
 async function refresh(): Promise<void> {
   if (inFlight) {
     return;
@@ -50,25 +67,29 @@ async function refresh(): Promise<void> {
   const { intervalMs, thresholds, showTokens } = readConfig();
   let nextDelayMs = intervalMs;
   try {
-    const [usage, model, tokens] = await Promise.all([
-      fetchUsage(),
-      readCurrentModel().catch(() => null),
+    const home = claudeHome();
+    const creds = await readCredentials(home);
+    const [usage, model, tokens, account] = await Promise.all([
+      fetchUsage(creds.accessToken),
+      readCurrentModel(projectsDir(home)).catch(() => null),
       showTokens
         ? updateTokenHistory({
             provider: "claude",
-            root: join(homedir(), ".claude", "projects"),
+            root: projectsDir(home),
             extract: extractDailyTotals,
           }).catch(() => null)
         : Promise.resolve(null),
+      readAccountInfo(home).catch(() => null),
     ]);
     lastUsage = usage;
     lastModel = model;
     lastTokens = tokens;
+    lastAccount = accountLine(account, planLabel(creds.subscriptionType, creds.rateLimitTier));
     lastSuccessAt = Date.now();
     consecutiveFailures = 0;
     lastUpdatedAt = new Date();
     lastStale = false;
-    statusBar.showUsage(usage, lastUpdatedAt, thresholds, false, model, tokens, showTokenHistory);
+    renderLast(thresholds, false);
   } catch (err) {
     if (err instanceof AuthError || err instanceof CredentialsError) {
       statusBar.showError(err.message);
@@ -86,7 +107,7 @@ async function refresh(): Promise<void> {
       } else if (lastUsage) {
         lastUpdatedAt = new Date();
         lastStale = true;
-        statusBar.showUsage(lastUsage, lastUpdatedAt, thresholds, true, lastModel, lastTokens, showTokenHistory);
+        renderLast(thresholds, true);
       } else {
         // No value to fall back on — but this is transient (network, HTTP 429), not an auth
         // problem, so do not tell the user to log in.
@@ -117,9 +138,7 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand("pulse.toggleTokenHistory", () => {
       showTokenHistory = !showTokenHistory;
       // Re-render from cached state only — toggling must never trigger a network poll.
-      if (lastUsage && lastUpdatedAt) {
-        statusBar.showUsage(lastUsage, lastUpdatedAt, readConfig().thresholds, lastStale, lastModel, lastTokens, showTokenHistory);
-      }
+      renderLast(readConfig().thresholds, lastStale);
     })
   );
 

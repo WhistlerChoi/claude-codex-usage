@@ -102,9 +102,9 @@ export function parseUsage(json: unknown): UsageData {
   };
 }
 
-/** Call the usage endpoint to fetch current usage. */
-export async function fetchUsage(): Promise<UsageData> {
-  const token = await readAccessToken();
+/** Call the usage endpoint to fetch current usage (reads the token itself when none is passed). */
+export async function fetchUsage(accessToken?: string): Promise<UsageData> {
+  const token = accessToken ?? (await readAccessToken());
 
   const res = await fetch(USAGE_URL, {
     headers: {

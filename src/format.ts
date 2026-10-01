@@ -1,5 +1,6 @@
 import type { UsageData, UsageWindow } from "./usageClient";
 import type { CurrentModel } from "./model";
+import type { AccountInfo } from "./account";
 import { tokenRows, type TokenStats } from "./tokenHistory";
 
 /**
@@ -48,6 +49,42 @@ function windowLine(label: string, w: UsageWindow, now: Date): string {
   return `**${label}**: ${pct(w.utilization)}% · ${formatResetIn(w.resetsAt, now)}`;
 }
 
+/**
+ * Plan name from the credentials' subscriptionType / rateLimitTier (pure). Undefined when neither
+ * is known. e.g. ("max", "default_claude_max_20x") → "Max 20x", ("team", "default_claude_max_5x")
+ * → "Team (Max 5x)".
+ */
+export function planLabel(subscriptionType?: string, rateLimitTier?: string): string | undefined {
+  const mult = /max_(\d+)x/.exec(rateLimitTier ?? "")?.[1];
+  const tier = mult ? `Max ${mult}x` : undefined;
+  if (!subscriptionType) {
+    return tier;
+  }
+  if (subscriptionType === "max") {
+    return tier ?? "Max";
+  }
+  const names: Record<string, string> = { pro: "Pro", team: "Team", enterprise: "Enterprise" };
+  const base = names[subscriptionType] ?? subscriptionType.charAt(0).toUpperCase() + subscriptionType.slice(1);
+  return tier ? `${base} (${tier})` : base;
+}
+
+/**
+ * One-line account summary: "email · plan · org" (pure). The org name is shown only for team /
+ * enterprise orgs — a personal org is just named after the email. Null when nothing is known.
+ */
+export function accountLine(info: AccountInfo | null | undefined, plan: string | undefined): string | null {
+  const parts: string[] = [];
+  if (info?.email) parts.push(info.email);
+  if (plan) parts.push(plan);
+  if (info?.orgName && /team|enterprise/.test(info.orgType ?? "")) parts.push(info.orgName);
+  return parts.length > 0 ? parts.join(" · ") : null;
+}
+
+/** Escape Markdown metacharacters (emails contain "_" and "."; org names are free text). */
+function escapeMarkdown(text: string): string {
+  return text.replace(/[\\`*_{}\[\]()<>#+!|~]/g, "\\$&");
+}
+
 /** Command behind the tooltip's "7d / 30d ▸" link; the only command the tooltip is trusted to run. */
 export const TOGGLE_TOKEN_HISTORY_COMMAND = "pulse.toggleTokenHistory";
 
@@ -58,14 +95,17 @@ export function tooltipMarkdown(
   now: Date = new Date(),
   model?: CurrentModel | null,
   tokens?: TokenStats | null,
-  showTokenHistory = false
+  showTokenHistory = false,
+  account?: string | null
 ): string {
-  const lines: string[] = [
-    "### Pulse",
-    "",
+  const lines: string[] = ["### Pulse", ""];
+  if (account) {
+    lines.push(`**Account**: ${escapeMarkdown(account)}`, "");
+  }
+  lines.push(
     windowLine("5h", usage.fiveHour, now),
-    windowLine("Weekly", usage.sevenDay, now),
-  ];
+    windowLine("Weekly", usage.sevenDay, now)
+  );
   const legacyModels = new Set<string>();
   if (usage.sevenDayOpus) {
     lines.push(windowLine("Weekly Opus", usage.sevenDayOpus, now));

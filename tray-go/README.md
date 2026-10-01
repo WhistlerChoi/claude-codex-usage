@@ -6,7 +6,7 @@ A **native Go** app that shows Claude Code and Codex usage in the system tray.
 ## What it shows
 
 - **Icon**: a gauge glyph on a colored rounded square — blue (normal) / orange (80%+) / red (95%+). The color follows Claude's usage, or Codex's when Claude's is unavailable. The percentages themselves are in the tooltip.
-- **Hover tooltip / right-click menu**: separate Claude and Codex sections with 5-hour, weekly, per-model Claude limits, current model, today's token usage (`Tokens today: …`; hover it in the right-click menu for the 7-day / 30-day totals and their change against the prior window), and time until reset. In the menu the reset times sit in a tab-aligned right column, so they line up across the Claude and Codex sections.
+- **Hover tooltip / right-click menu**: separate Claude and Codex sections with the logged-in Claude account (`Account: you@example.com · Max 20x`), 5-hour, weekly, per-model Claude limits, current model, today's token usage (`Tokens today: …`; hover it in the right-click menu for the 7-day / 30-day totals and their change against the prior window), and time until reset. In the menu the reset times sit in a tab-aligned right column, so they line up across the Claude and Codex sections.
 - **Right-click menu**: details + `About` / `Refresh Now` / `Quit`
 
 ## How it works
@@ -56,7 +56,7 @@ wix eula accept wix7
 Build the EXE and installer together:
 
 ```powershell
-.\build-msi.ps1                 # → Pulse-1.5.0-x64.msi
+.\build-msi.ps1                 # → Pulse-1.6.0-x64.msi
 ```
 
 The installer adds a Start menu shortcut and, after a new installation, shows a checked

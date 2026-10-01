@@ -98,8 +98,8 @@ enum WakeupError: Error {
 
 /// Smallest possible request that makes the provider record activity in the current window.
 /// One attempt, no retry. Throws on any failure; the caller swallows it.
-func sendClaudeWakeup() async throws {
-    let token = try await currentAccessToken()
+func sendClaudeWakeup(home: ClaudeHome = claudeHome()) async throws {
+    let token = try await currentAccessToken(home: home)
     var req = URLRequest(url: URL(string: "https://api.anthropic.com/v1/messages")!)
     req.httpMethod = "POST"
     req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")

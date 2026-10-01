@@ -1,6 +1,6 @@
 import { readdir, stat, readFile } from "node:fs/promises";
-import { homedir } from "node:os";
 import { join } from "node:path";
+import { claudeHome, projectsDir } from "./claudeHome";
 
 export interface CurrentModel {
   id: string;
@@ -51,9 +51,8 @@ export function extractLastModel(content: string): string | null {
   return null;
 }
 
-/** Find the most recently modified transcript path under ~/.claude/projects. */
-async function latestTranscriptPath(): Promise<string | null> {
-  const root = join(homedir(), ".claude", "projects");
+/** Find the most recently modified transcript path under <configDir>/projects. */
+async function latestTranscriptPath(root: string): Promise<string | null> {
   let dirs;
   try {
     dirs = await readdir(root, { withFileTypes: true });
@@ -97,8 +96,10 @@ async function latestTranscriptPath(): Promise<string | null> {
  * Read the model in use in the most recent session (local, best-effort).
  * Returns null if not found.
  */
-export async function readCurrentModel(): Promise<CurrentModel | null> {
-  const path = await latestTranscriptPath();
+export async function readCurrentModel(
+  root: string = projectsDir(claudeHome())
+): Promise<CurrentModel | null> {
+  const path = await latestTranscriptPath(root);
   if (!path) {
     return null;
   }

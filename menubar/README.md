@@ -18,7 +18,8 @@ Clicking it opens a dropdown with separate Claude and Codex sections, each heade
 It uses the same source as the VSCode extension (ported to Swift):
 
 - Usage: `https://api.anthropic.com/api/oauth/usage`
-- Token: `~/.claude/.credentials.json` → macOS keychain if absent
+- Token: `<config dir>/.credentials.json` and the macOS keychain, whichever is fresher (`<config dir>` is `CLAUDE_CONFIG_DIR`, default `~/.claude`)
+- Account: `oauthAccount` (email, organization) from Claude Code's global config (`~/.claude.json`, or `$CLAUDE_CONFIG_DIR/.claude.json`) and the plan (`subscriptionType` / `rateLimitTier`) from the credentials — no extra request
 - Current model: the last `message.model` from the most recent transcript among `~/.claude/projects/**/*.jsonl`
 - Tokens: `message.usage` from `~/.claude/projects/**/*.jsonl` (including `subagents/`), one count per `message.id`, and for Codex the per-response usage records in `CODEX_HOME/sessions/**/*.jsonl`, bucketed by local day. Daily totals are kept in `~/.pulse/token-history.json` (override the directory with `PULSE_HOME`; shared with the other Pulse apps) so 7-day / 30-day figures survive Claude Code's 30-day transcript cleanup; `~/.pulse/cache/` holds a per-file parse cache so a poll re-reads only changed files. Computed locally; nothing from the logs is transmitted.
 
@@ -146,6 +147,32 @@ or run `/logout` followed by `/login` inside Claude Code, which recreates the it
 
 If a "wants to access" dialog ever does appear, click **Always Allow** — plain "Allow"
 grants access once and the dialog returns on the next poll.
+
+## Multiple Claude accounts
+
+Pulse monitors several Claude accounts at once instead of switching one login back and forth.
+Each account lives in its own Claude Code profile — a separate `CLAUDE_CONFIG_DIR`, the mechanism
+Claude Code itself provides — so every account stays logged in, and Pulse only *reads* them.
+
+- **Add Account…** (`Accounts ▸`) asks for a short name, creates `~/.claude-<name>` (or adopts it if
+  it exists), records it in `$PULSE_HOME/accounts.json`, and opens Terminal with
+  `CLAUDE_CONFIG_DIR=~/.claude-<name> claude` so you can log in. Choose **Refresh Now** afterwards.
+- **Show in Menu Bar** picks which account the menu-bar title shows. Every other account gets its
+  own `Claude · <name>` section in the dropdown, with its own login item when it needs one.
+- **Open Claude Code (<name>)** / **Copy Shell Alias (<name>)** start or set up a shell for that
+  account (`alias claude-<name>="CLAUDE_CONFIG_DIR='…' claude"`).
+- **Remove Account** only stops monitoring; the profile directory and its login are left alone.
+
+If you have been switching accounts with `/logout` → `/login`: keep your current login as the
+default profile, stop logging out, and add the other account with **Add Account…**. From then on,
+run that account with its alias. The Claude Code IDE extensions use the default profile unless the
+editor itself is started with `CLAUDE_CONFIG_DIR` set.
+
+Pulse deliberately does not swap the default login between accounts: that would mean creating and
+rewriting Claude Code's keychain item and stashing refresh tokens, which races running sessions
+(a session that refreshes the old account revokes the stashed token) and breaks the keychain rules
+below. With profiles, each account's tokens are refreshed and written back only to that account's
+own keychain item (`Claude Code-credentials-<hash>`), still through `/usr/bin/security`.
 
 ## Auto Wakeup
 

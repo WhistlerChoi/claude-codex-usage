@@ -22,6 +22,7 @@ var (
 	lastUsage               *usageResp
 	lastModel               *currentModel
 	lastTokens              *tokenStats
+	lastAccount             string // accountLine(), "" when unknown
 	lastCodexUsage          *codexUsage
 	lastCodexModel          *currentModel
 	lastCodexTokens         *tokenStats
@@ -40,10 +41,10 @@ const (
 
 // systray cannot add items later, so every menu line is pre-created, in display order:
 // Claude slots, Claude "Tokens today" (with a 7d / 30d submenu), Codex slots, Codex tokens,
-// trailing slots. Claude: header, stale, 5h, Weekly, Opus, Sonnet, up to 4 scoped, model = 11.
+// trailing slots. Claude: header, account, stale, 5h, Weekly, Opus, Sonnet, up to 4 scoped, model = 12.
 // Codex: header, stale, 5h, Weekly, model = 5. Trailing: retry line (+1 spare).
 const (
-	claudeSlots   = 12
+	claudeSlots   = 13
 	codexSlots    = 6
 	trailingSlots = 3
 )
@@ -204,6 +205,7 @@ func pollLoop() {
 func refresh(interval time.Duration) time.Duration {
 	type claudeResult struct {
 		usage *usageResp
+		creds *parsedCreds
 		err   error
 	}
 	type codexFetchResult struct {
@@ -212,7 +214,16 @@ func refresh(interval time.Duration) time.Duration {
 	}
 	claudeCh := make(chan claudeResult, 1)
 	codexCh := make(chan codexFetchResult, 1)
-	go func() { u, err := fetchUsage(); claudeCh <- claudeResult{u, err} }()
+	home := claudeHome()
+	go func() {
+		creds, err := readCredentials(home)
+		if err != nil {
+			claudeCh <- claudeResult{nil, nil, err}
+			return
+		}
+		u, err := fetchUsage(creds.Token)
+		claudeCh <- claudeResult{u, creds, err}
+	}()
 	go func() { u, err := fetchCodexUsage(); codexCh <- codexFetchResult{u, err} }()
 	claude := <-claudeCh
 	codexFetch := <-codexCh
@@ -222,6 +233,7 @@ func refresh(interval time.Duration) time.Duration {
 	if err == nil {
 		lastUsage, lastModel, lastSuccessAt = usage, readModel(readCurrentModel), now
 		lastTokens = readTokenStats()
+		lastAccount = accountLine(readAccountInfo(home), planLabel(claude.creds.SubscriptionType, claude.creds.RateLimitTier))
 	}
 	if codexErr == nil {
 		lastCodexUsage, lastCodexModel, lastCodexSuccessAt = codex, readModel(readCurrentCodexModel), now
@@ -391,6 +403,9 @@ func applyCombined(claudeErr, codexErr error, interval, retryIn time.Duration) {
 	var claudeStats *tokenStats
 	if lastUsage != nil {
 		claude = append(claude, "Claude")
+		if lastAccount != "" {
+			claude = append(claude, "Account: "+lastAccount)
+		}
 		if claudeStale {
 			claude = append(claude, "⚠ Refresh failed — showing last value")
 		}

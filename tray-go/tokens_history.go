@@ -349,11 +349,7 @@ func updateTokenHistory(provider, root string, extract func(string) dailyTotals,
 
 // readTokenStats / readCodexTokenStats: the per-provider entry points used by the poll loop.
 func readTokenStats() *tokenStats {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return nil
-	}
-	return updateTokenHistory("claude", filepath.Join(home, ".claude", "projects"), extractDailyTotals, pulseHome(), time.Now())
+	return updateTokenHistory("claude", claudeHome().projectsDir(), extractDailyTotals, pulseHome(), time.Now())
 }
 
 func readCodexTokenStats() *tokenStats {
