@@ -162,6 +162,9 @@ Claude Code itself provides — so every account stays logged in, and Pulse only
 - **Open Claude Code (<name>)** / **Copy Shell Alias (<name>)** start or set up a shell for that
   account (`alias claude-<name>="CLAUDE_CONFIG_DIR='…' claude"`).
 - **Remove Account** only stops monitoring; the profile directory and its login are left alone.
+- A green **`● VS Code`** badge marks the account a running Claude Code session in VS Code is using
+  (read from that session's `CLAUDE_CONFIG_DIR`, so the extension's `claudeCode.environmentVariables`
+  setting is honored). It appears only while a VS Code Claude session is open and updates within ~30 s.
 
 If you have been switching accounts with `/logout` → `/login`: keep your current login as the
 default profile, stop logging out, and add the other account with **Add Account…**. From then on,

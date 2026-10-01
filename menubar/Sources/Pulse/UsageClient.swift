@@ -35,6 +35,7 @@ struct ProviderSection {
     var title: String? = nil   // header text; nil = the provider name ("Claude · Work" with profiles)
     var account: String? = nil   // accountLine(), shown as the header's hover tooltip
     var notes: [String] = []   // extra note lines above the table (stale warning, error, login hint)
+    var inVSCode = false   // a running VS Code Claude session uses this account ("● VS Code" badge)
 }
 
 enum UsageError: Error, LocalizedError {
